@@ -1,6 +1,7 @@
-# 認証情報（機密）
+# 認証情報・個人設定（機密）
 credentials.json
 token.json
+.env
 
 # 仮想環境
 3-12-13env/

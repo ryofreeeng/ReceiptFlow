@@ -10,3 +10,6 @@ google-auth-httplib2
 # 認証情報（トークン）の管理ライブラリ（import名: google.oauth2 / google.auth）
 # google-auth-oauthlib をインストールすると自動で入るが、明示的に記載
 google-auth
+
+# .envファイルを読み込んで環境変数にセットするライブラリ
+python-dotenv

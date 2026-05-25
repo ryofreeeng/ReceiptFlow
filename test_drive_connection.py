@@ -7,6 +7,10 @@ from google.auth.transport.requests import Request
 # google-api-python-client パッケージ。Drive APIのサービスオブジェクトを生成する
 from googleapiclient.discovery import build
 import os
+from dotenv import load_dotenv
+
+# .envファイルを読み込んで環境変数にセットする
+load_dotenv()
 
 # アクセス許可の範囲。"drive"はDrive全体の読み書きを意味する
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -14,6 +18,8 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 CREDENTIALS_FILE = "credentials.json"
 # 認証後に自動生成されるトークン保存ファイル（次回以降ブラウザ不要になる）
 TOKEN_FILE = "token.json"
+# 取得対象フォルダのID（.envから読み込む）
+UNPROCESSED_FOLDER_ID = os.environ["UNPROCESSED_FOLDER_ID"]
 
 
 def get_drive_service():
@@ -45,10 +51,10 @@ def main():
     print("Google Drive APIに接続中...")
     service = get_drive_service()
 
-    # Drive APIを呼び出してファイル一覧を取得する（最大10件）
-    # fields: 取得する情報を絞る（id・名前・種類のみ）
+    # unprocessedフォルダ内のPDFだけを取得する
+    # q: 絞り込み条件。親フォルダIDとmimeTypeでPDFのみに絞る
     results = service.files().list(
-        pageSize=10,
+        q=f"'{UNPROCESSED_FOLDER_ID}' in parents and mimeType='application/pdf'",
         fields="files(id, name, mimeType)"
     ).execute()
 
@@ -56,12 +62,12 @@ def main():
     files = results.get("files", [])
 
     if not files:
-        print("ファイルが見つかりませんでした。")
+        print("unprocessedフォルダにPDFが見つかりませんでした。")
         return
 
-    print(f"\n接続成功！ファイル一覧（最大10件）:")
+    print(f"\n接続成功！unprocessedフォルダ内のPDF一覧:")
     for f in files:
-        print(f"  {f['name']}  ({f['mimeType']})")
+        print(f"  {f['name']}  (id: {f['id']})")
 
 
 if __name__ == "__main__":
