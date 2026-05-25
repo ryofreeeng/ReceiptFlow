@@ -1,0 +1,12 @@
+# Google Drive APIを呼び出す本体ライブラリ（import名: googleapiclient）
+google-api-python-client
+
+# Googleへのブラウザ認証（OAuth）を処理するライブラリ（import名: google_auth_oauthlib）
+google-auth-oauthlib
+
+# google-api-python-clientが内部で使うHTTP通信部品（直接importしない）
+google-auth-httplib2
+
+# 認証情報（トークン）の管理ライブラリ（import名: google.oauth2 / google.auth）
+# google-auth-oauthlib をインストールすると自動で入るが、明示的に記載
+google-auth
