@@ -6,11 +6,20 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 # google-api-python-client パッケージ。Drive APIのサービスオブジェクトを生成する
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+import io
 import os
+import sys
 from dotenv import load_dotenv
 
 # .envファイルを読み込んで環境変数にセットする
 load_dotenv()
+
+# スクリプト・exe どちらの実行方法でも正しいプロジェクトルートを取得する
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # アクセス許可の範囲。"drive"はDrive全体の読み書きを意味する
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -65,9 +74,26 @@ def main():
         print("unprocessedフォルダにPDFが見つかりませんでした。")
         return
 
-    print(f"\n接続成功！unprocessedフォルダ内のPDF一覧:")
+    print(f"\n接続成功！{len(files)}件のPDFをダウンロードします...")
     for f in files:
-        print(f"  {f['name']}  (id: {f['id']})")
+        save_path = os.path.join(BASE_DIR, "receipts", "unprocessed", f["name"])
+
+        # ファイルの内容をバイト列として取得するリクエストを作成する
+        request = service.files().get_media(fileId=f["id"])
+        # io.BytesIOはメモリ上のバッファ（一時的な書き込み先）
+        buffer = io.BytesIO()
+        # MediaIoBaseDownloadがバッファにチャンク単位で書き込む
+        downloader = MediaIoBaseDownload(buffer, request)
+
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+        # バッファの内容をローカルファイルに書き出す
+        with open(save_path, "wb") as out:
+            out.write(buffer.getvalue())
+
+        print(f"  ダウンロード完了: {save_path}")
 
 
 if __name__ == "__main__":
