@@ -13,3 +13,12 @@ google-auth
 
 # .envファイルを読み込んで環境変数にセットするライブラリ
 python-dotenv
+
+# PDFを開いてページを画像データに変換するライブラリ（import名: fitz）
+PyMuPDF
+
+# 画像から文字を認識するOCRライブラリ。日本語・英語に対応（import名: easyocr）
+easyocr
+
+# 画像データを数値配列として扱うライブラリ。PyMuPDFとEasyOCRの橋渡し役（import名: numpy）
+numpy
