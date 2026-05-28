@@ -24,7 +24,7 @@ DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
 
 # PDFを画像に変換するときの拡大倍率。値が大きいほど高解像度になりOCR精度が上がるが処理が遅くなる
 # 2.0→3.0→4.0 と上げながらOCR結果と画像を目視で比較して最適値を探す
-ZOOM = 4.0
+ZOOM = 8.0
 
 # Trueにするとページ画像とOCRテキストをセッションフォルダに保存する。精度確認が終わったらFalseにする
 SAVE_DEBUG = True
@@ -32,6 +32,30 @@ SAVE_DEBUG = True
 # --- 前処理フラグ（Trueで有効・Falseで無効。1つずつ試して効果を確認する） ---
 # ①グレースケール変換：カラー→白黒にして文字と背景の境界を単純化する
 PREPROCESS_GRAYSCALE = True
+# ②2値化：各ピクセルを完全な黒か白の二択に変換する。グレースケール済みの画像に適用する
+#   BINARIZE_THRESHOLDの値以下のピクセル（暗い部分＝文字）を黒（0）、それより明るい部分を白（255）にする
+#   値を大きくするほどかすれた文字も黒になる（0〜255。小さいほど厳しく、大きいほど緩い）
+PREPROCESS_BINARIZE = True
+BINARIZE_THRESHOLD = 250
+# ③ノイズ除去：2値化で生じた小さなゴミ点（孤立した黒ピクセル）を取り除く
+#   medianBlur：注目ピクセルの周辺DENOISE_KERNEL×DENOISE_KERNEL個の値の中央値で置き換える
+#   孤立したゴミ点は周辺が白（255）に囲まれているため中央値が255になり消える
+#   値は奇数のみ有効（3・5・7）。大きいほど効果が強いが文字も削れてくる
+PREPROCESS_DENOISE = True
+DENOISE_KERNEL = 7
+# ④収縮（cv2.erode）：黒領域（文字）を広げて細い文字を太くする
+#   名前が「収縮」なのは「白背景を収縮させる＝黒文字が広がる」という意味
+#   ※「膨張」と呼ぶ場合もあるが、OpenCVのcv2.erode()を使う点に注意
+#     cv2.dilate()は白を広げる（文字が細くなる）ためここでは使わない
+#   ERODE_KERNELはカーネルサイズ（N×Nの正方形で広がる範囲を決める）
+PREPROCESS_ERODE = False
+ERODE_KERNEL = 2
+
+# --- シャープニング（cv2.filter2D）は使用しない ---
+# シャープニングは0〜255のグレースケール値のエッジ勾配を強調する処理。
+# 2値化後はピクセルが0か255の二択になっており中間的な勾配が存在しないため
+# シャープニングを適用しても効果がない。2値化の前に適用する意義はあるが、
+# 今回は2値化で十分な境界明確化ができているため省略する。
 
 
 def preprocess_image(img):
@@ -43,6 +67,31 @@ def preprocess_image(img):
         # cv2.COLOR_RGB2GRAY：R・G・Bの輝度を人間の目の感度に合わせた比率で合成して1値にする
         # EasyOCRはグレースケール（2次元配列）もRGB（3次元配列）もどちらも受け付ける
         img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+    if PREPROCESS_BINARIZE:
+        # グレースケール画像の各ピクセルを「完全な黒（0）」か「完全な白（255）」の二択に変換する
+        # BINARIZE_THRESHOLD以下のピクセル（暗い部分＝文字）→黒（0）
+        # BINARIZE_THRESHOLDより明るいピクセル（背景）→白（255）
+        # 値を上げるほど「薄い文字も黒にする」ようになる。まず180で試して調整する
+        if img.ndim != 2:
+            # 2値化はグレースケール（2次元配列）にのみ適用できる。RGBのままなら先にグレースケール化する
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        img = cv2.threshold(img, BINARIZE_THRESHOLD, 255, cv2.THRESH_BINARY)[1]
+
+    if PREPROCESS_DENOISE:
+        # 孤立した小さなゴミ点を除去する
+        # medianBlur：対象ピクセルの周辺DENOISE_KERNEL×DENOISE_KERNELの範囲の中央値で置き換える
+        # 2値化後の孤立ゴミ点は周囲が白（255）ばかりのため中央値→255（白）になり消える
+        # 文字は周囲にも黒ピクセルが連続しているため中央値→0（黒）のまま残る
+        img = cv2.medianBlur(img, DENOISE_KERNEL)
+
+    if PREPROCESS_ERODE:
+        # 黒領域（文字）を周囲に広げて細い文字を太くする
+        # np.ones()でERODE_KERNEL×ERODE_KERNELの全1カーネルを作る
+        # cv2.erode()は各ピクセルをカーネル範囲の最小値（黒=0）で置き換える
+        # → 黒ピクセルの隣にある白ピクセルが黒になる → 文字が太くなる
+        kernel = np.ones((ERODE_KERNEL, ERODE_KERNEL), np.uint8)
+        img = cv2.erode(img, kernel, iterations=1)
     return img
 
 
@@ -77,10 +126,20 @@ def pdf_to_images(pdf_path, session_dir):
         # pix.samplesはRGBのバイト列。numpy配列に変換して(高さ, 幅, チャンネル数)の形にする
         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
 
-        # 前処理を適用する。どのフラグが有効かをステム名に追記して元画像と区別できるようにする
+        # 前処理を適用する。どのフラグが有効かと設定値をステム名に追記して区別できるようにする
+        # _gray      ：grayscale（グレースケール変換）の略。設定値なし
+        # _bin{値}   ：binarization（2値化）の略。しきい値を末尾に付ける（例：_bin220）
+        # _dn{値}    ：denoise（ノイズ除去）の略。カーネルサイズを末尾に付ける（例：_dn3）
+        # _er{値}    ：erode（収縮＝黒領域拡張）の略。カーネルサイズを末尾に付ける（例：_er2）
         img = preprocess_image(img)
         if PREPROCESS_GRAYSCALE:
             stem += "_gray"
+        if PREPROCESS_BINARIZE:
+            stem += f"_bin{BINARIZE_THRESHOLD}"
+        if PREPROCESS_DENOISE:
+            stem += f"_dn{DENOISE_KERNEL}"
+        if PREPROCESS_ERODE:
+            stem += f"_er{ERODE_KERNEL}"
 
         if SAVE_DEBUG:
             # 前処理後の画像を保存する。元画像（pix.save）とは別ファイルになる
