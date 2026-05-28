@@ -59,6 +59,14 @@ DENOISE_KERNEL = 7
 PREPROCESS_ERODE = False
 ERODE_KERNEL = 2
 
+# --- 後処理フラグ ---
+# Trueにすると、同じ行と判定した検出領域のテキストをスペースで連結して出力する
+# PaddleOCR使用時のみ有効（座標情報を持つエンジンが必要）
+POSTPROCESS_MERGE_LINES = True
+# 行判定の閾値。検出ボックスの平均高さに対する割合で指定する
+# 0.5 = 平均高さの半分以内のY距離なら同じ行とみなす。値を上げると判定が緩くなる
+MERGE_LINE_THRESHOLD = 0.5
+
 # --- シャープニング（cv2.filter2D）は使用しない ---
 # シャープニングは0〜255のグレースケール値のエッジ勾配を強調する処理。
 # 2値化後はピクセルが0か255の二択になっており中間的な勾配が存在しないため
@@ -99,6 +107,48 @@ def preprocess_image(img):
         kernel = np.ones((ERODE_KERNEL, ERODE_KERNEL), np.uint8)
         img = cv2.erode(img, kernel, iterations=1)
     return img
+
+
+def merge_lines_by_coord(texts, polys):
+    """座標情報をもとに同じ行と判定したテキストを連結して返す。
+    各検出領域のY中心を計算し、MERGE_LINE_THRESHOLD以内のものを同じ行としてまとめる。
+    同じ行の中ではX左端でソートしてスペースで連結する。
+    戻り値は行ごとのテキスト文字列のリスト。"""
+    if not texts or not polys:
+        return texts
+
+    # ① 各検出領域のY中心・Y高さ・X左端を計算してテキストとまとめる
+    regions = []
+    for text, poly in zip(texts, polys):
+        ys = [p[1] for p in poly]
+        xs = [p[0] for p in poly]
+        y_center = (min(ys) + max(ys)) / 2
+        y_height = max(ys) - min(ys)
+        x_left = min(xs)
+        regions.append((y_center, y_height, x_left, text))
+
+    # ② 閾値を算出する（全ボックスの平均高さ × MERGE_LINE_THRESHOLD）
+    avg_height = sum(r[1] for r in regions) / len(regions)
+    threshold = avg_height * MERGE_LINE_THRESHOLD
+
+    # ③ Y中心でソートして行グループに振り分ける
+    regions.sort(key=lambda r: r[0])
+    line_groups = []   # 各要素は [(x_left, text), ...] のリスト
+    for y_center, _, x_left, text in regions:
+        if line_groups and abs(y_center - line_groups[-1][0]) <= threshold:
+            # 直前のグループのY中心と比較して閾値内なら同じ行に追加
+            line_groups[-1][1].append((x_left, text))
+        else:
+            # 新しい行グループを開始する。先頭にY中心代表値を保持する
+            line_groups.append([y_center, [(x_left, text)]])
+
+    # ④ 各グループをX順にソートしてスペースで連結する
+    merged = []
+    for _, items in line_groups:
+        items.sort(key=lambda r: r[0])
+        merged.append(" ".join(text for _, text in items))
+
+    return merged
 
 
 def init_reader():
@@ -143,7 +193,12 @@ def run_ocr(reader, img):
             return []
         # predict()の戻り値は辞書のリスト。rec_texts キーにテキスト文字列のリストが入っている
         # その他のキー：rec_scores（信頼度）、dt_polys（検出座標）、rec_polys など
-        return results[0].get('rec_texts', [])
+        texts = results[0].get('rec_texts', [])
+        polys = results[0].get('dt_polys', [])
+        if POSTPROCESS_MERGE_LINES and polys:
+            # 座標情報をもとに同じ行のテキストを連結する
+            return merge_lines_by_coord(texts, polys)
+        return texts
     elif OCR_ENGINE == "manga-ocr":
         from PIL import Image
         # manga-ocrはPIL Imageを期待する。numpy配列（RGB）から変換する

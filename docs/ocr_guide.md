@@ -140,6 +140,26 @@ ERODE_KERNEL         = 2      # 拡張範囲（N×Nの正方形）
 
 ---
 
+### 後処理フラグ
+
+```python
+POSTPROCESS_MERGE_LINES = True   # Trueで行マージを有効にする
+MERGE_LINE_THRESHOLD    = 0.5    # 行判定の閾値（平均ボックス高さの何倍まで同じ行とみなすか）
+```
+
+PaddleOCR の検出モデルが1行を複数の領域に分割することがあり、余計な改行が出力に混入する問題への対処。`POSTPROCESS_MERGE_LINES=True` にすると、座標情報をもとに同じ行と判定したテキストをスペースで連結して出力する。
+
+| フラグ | 効果 |
+|---|---|
+| `POSTPROCESS_MERGE_LINES = False` | 検出領域ごとに改行（デフォルト動作） |
+| `POSTPROCESS_MERGE_LINES = True` | 同じ行と判定した領域をスペースで連結 |
+
+`MERGE_LINE_THRESHOLD` は全検出ボックスの平均高さに対する割合で指定する。`0.5` なら「Y中心の差が平均高さの半分以内なら同じ行」。値を上げると判定が緩く（より多くをまとめる）、下げると厳しくなる。
+
+PaddleOCR 使用時のみ有効（座標情報 `dt_polys` を持つエンジンが必要）。
+
+---
+
 ## `preprocess_image()` 関数
 
 ```python
@@ -276,6 +296,47 @@ img = cv2.medianBlur(img, DENOISE_KERNEL)
 | `7` | 7×7=49ピクセル | 強力だが破壊的 | 細い文字は消えやすい |
 
 **奇数のみ有効**（中央値は中央のピクセルが1つ定まる奇数個でないと計算できないため）。
+
+---
+
+## `merge_lines_by_coord()` 関数
+
+```python
+def merge_lines_by_coord(texts, polys):
+    # ① Y中心・高さ・X左端を計算
+    # ② 平均高さ × MERGE_LINE_THRESHOLD を閾値とする
+    # ③ Y中心でソートして行グループに振り分ける
+    # ④ 各グループをX順にソートしてスペースで連結する
+```
+
+`run_ocr()` の PaddleOCR ブランチから `POSTPROCESS_MERGE_LINES=True` のときに呼ばれる。`rec_texts`（テキストリスト）と `dt_polys`（座標リスト）を受け取り、行マージ後のテキストリストを返す。
+
+### 行グループ化の仕組み
+
+```
+dt_polys[i] = [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]  ← 検出領域の4頂点
+
+Y中心  = (min(y) + max(y)) / 2
+Y高さ  = max(y) - min(y)
+X左端  = min(x)
+```
+
+```
+全領域をY中心でソート（上から下）
+    ↓
+先頭を「現在の行グループ」とする
+    ↓ 次の領域を見る
+  Y中心の差 ≤ 平均高さ × MERGE_LINE_THRESHOLD？
+    Yes → 同じ行グループに追加
+    No  → 新しい行グループを開始
+    ↓
+各グループをX左端でソート → スペースで連結
+```
+
+### 注意点
+
+- PaddleOCR の `dt_polys` が空のとき（まれに発生）はマージをスキップして `rec_texts` をそのまま返す
+- 閾値が大きすぎると異なる行が1行にまとめられてしまう。`0.5` が基本値
 
 ---
 
