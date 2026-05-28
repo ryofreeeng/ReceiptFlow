@@ -20,6 +20,13 @@ PyMuPDF
 # 画像から文字を認識するOCRライブラリ。日本語・英語に対応（import名: easyocr）
 easyocr
 
+# 画像から文字を認識するOCRライブラリ。EasyOCRより精度が高い傾向（import名: paddleocr）
+# OCR_ENGINE = "paddleocr" のときに使用する
+paddleocr
+
+# paddleocr の実行エンジン本体。paddleocr とは別に明示的なインストールが必要
+paddlepaddle
+
 # 画像データを数値配列として扱うライブラリ。PyMuPDFとEasyOCRの橋渡し役（import名: numpy）
 numpy
 

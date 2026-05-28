@@ -1,8 +1,6 @@
 # PDFを画像に変換するライブラリ。パッケージ名はPyMuPDFだがimport名はfitz
 import fitz
-# 画像から文字を認識するOCRライブラリ
-import easyocr
-# 画像データを数値配列として扱うライブラリ。PyMuPDFの出力をEasyOCRが読める形式に変換するために使う
+# 画像データを数値配列として扱うライブラリ。PyMuPDFの出力をOCRエンジンが読める形式に変換するために使う
 import numpy as np
 # 画像前処理ライブラリ（グレースケール変換・2値化・コントラスト強調・ノイズ除去に使う）
 import cv2
@@ -22,26 +20,33 @@ UNPROCESSED_DIR = os.path.join(BASE_DIR, "receipts", "unprocessed")
 # デバッグ出力の親フォルダ。実行ごとにこの下にサブフォルダが作られる
 DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
 
+# --- OCRエンジンの選択 ---
+# この1行を変えるだけでエンジンを切り替えられる
+# "easyocr"  : EasyOCR（日英対応・ローカル実行）
+# "paddleocr": PaddleOCR（日英対応・ローカル実行・EasyOCRより精度が高い傾向）
+# "tesseract"・"manga-ocr" は今後対応予定
+OCR_ENGINE = "paddleocr"
+
 # PDFを画像に変換するときの拡大倍率。値が大きいほど高解像度になりOCR精度が上がるが処理が遅くなる
-# 2.0→3.0→4.0 と上げながらOCR結果と画像を目視で比較して最適値を探す
-ZOOM = 8.0
+# PaddleOCRは内部で前処理を行うため、EasyOCR時の8.0より低い値で十分。4.0以上にすると max_side_limit(4000px) を超える
+ZOOM = 2.0
 
 # Trueにするとページ画像とOCRテキストをセッションフォルダに保存する。精度確認が終わったらFalseにする
 SAVE_DEBUG = True
 
 # --- 前処理フラグ（Trueで有効・Falseで無効。1つずつ試して効果を確認する） ---
 # ①グレースケール変換：カラー→白黒にして文字と背景の境界を単純化する
-PREPROCESS_GRAYSCALE = True
+PREPROCESS_GRAYSCALE = False
 # ②2値化：各ピクセルを完全な黒か白の二択に変換する。グレースケール済みの画像に適用する
 #   BINARIZE_THRESHOLDの値以下のピクセル（暗い部分＝文字）を黒（0）、それより明るい部分を白（255）にする
 #   値を大きくするほどかすれた文字も黒になる（0〜255。小さいほど厳しく、大きいほど緩い）
-PREPROCESS_BINARIZE = True
-BINARIZE_THRESHOLD = 250
+PREPROCESS_BINARIZE = False
+BINARIZE_THRESHOLD = 240
 # ③ノイズ除去：2値化で生じた小さなゴミ点（孤立した黒ピクセル）を取り除く
 #   medianBlur：注目ピクセルの周辺DENOISE_KERNEL×DENOISE_KERNEL個の値の中央値で置き換える
 #   孤立したゴミ点は周辺が白（255）に囲まれているため中央値が255になり消える
 #   値は奇数のみ有効（3・5・7）。大きいほど効果が強いが文字も削れてくる
-PREPROCESS_DENOISE = True
+PREPROCESS_DENOISE = False
 DENOISE_KERNEL = 7
 # ④収縮（cv2.erode）：黒領域（文字）を広げて細い文字を太くする
 #   名前が「収縮」なのは「白背景を収縮させる＝黒文字が広がる」という意味
@@ -65,14 +70,12 @@ def preprocess_image(img):
     if PREPROCESS_GRAYSCALE:
         # RGB（3チャンネル）→グレースケール（1チャンネル）に変換する
         # cv2.COLOR_RGB2GRAY：R・G・Bの輝度を人間の目の感度に合わせた比率で合成して1値にする
-        # EasyOCRはグレースケール（2次元配列）もRGB（3次元配列）もどちらも受け付ける
         img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
 
     if PREPROCESS_BINARIZE:
         # グレースケール画像の各ピクセルを「完全な黒（0）」か「完全な白（255）」の二択に変換する
         # BINARIZE_THRESHOLD以下のピクセル（暗い部分＝文字）→黒（0）
         # BINARIZE_THRESHOLDより明るいピクセル（背景）→白（255）
-        # 値を上げるほど「薄い文字も黒にする」ようになる。まず180で試して調整する
         if img.ndim != 2:
             # 2値化はグレースケール（2次元配列）にのみ適用できる。RGBのままなら先にグレースケール化する
             img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -93,6 +96,47 @@ def preprocess_image(img):
         kernel = np.ones((ERODE_KERNEL, ERODE_KERNEL), np.uint8)
         img = cv2.erode(img, kernel, iterations=1)
     return img
+
+
+def init_reader():
+    """OCR_ENGINEの設定に応じてOCRエンジンを初期化して返す。
+    新しいエンジンを追加するときはここにelifブロックを1つ足す。"""
+    if OCR_ENGINE == "easyocr":
+        import easyocr
+        print("EasyOCRを初期化中...")
+        # 初回実行時はモデルファイルをダウンロードするため数分かかる
+        return easyocr.Reader(['ja', 'en'])
+    elif OCR_ENGINE == "paddleocr":
+        from paddleocr import PaddleOCR
+        print("PaddleOCRを初期化中...")
+        # use_textline_orientation=True：テキスト行の向き（0°/180°）を検出する
+        # ※旧パラメータ use_angle_cls は非推奨になったため use_textline_orientation を使う
+        # lang='japan'：日本語モデルを使う（初回実行時にモデルをダウンロードする）
+        return PaddleOCR(use_textline_orientation=True, lang='japan')
+    else:
+        raise ValueError(f"未対応のOCRエンジン: {OCR_ENGINE!r}。'easyocr' か 'paddleocr' を指定してください")
+
+
+def run_ocr(reader, img):
+    """OCR_ENGINEの設定に応じて画像からテキスト文字列のリストを返す。
+    新しいエンジンを追加するときはここにelifブロックを1つ足す。"""
+    if OCR_ENGINE == "easyocr":
+        # readtext()の戻り値は [(座標, テキスト, 信頼度), ...] のリスト
+        results = reader.readtext(img)
+        return [r[1] for r in results]
+    elif OCR_ENGINE == "paddleocr":
+        # PaddleOCRはBGR形式のnumpy配列を期待する。グレースケール（2次元）の場合はBGRに変換する
+        ocr_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img
+        # predict()はジェネレータを返す。list()で消費して全結果を取得する
+        # 旧API: reader.ocr(img, cls=True) → 新API: reader.predict(img)
+        # （向き検出は初期化時の use_textline_orientation=True で制御するため cls 引数は不要）
+        results = list(reader.predict(ocr_img))
+        if not results:
+            return []
+        # predict()の戻り値は辞書のリスト。rec_texts キーにテキスト文字列のリストが入っている
+        # その他のキー：rec_scores（信頼度）、dt_polys（検出座標）、rec_polys など
+        return results[0].get('rec_texts', [])
+    return []
 
 
 def pdf_to_images(pdf_path, session_dir):
@@ -161,12 +205,9 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
     for i, (img, stem) in enumerate(images_with_stems):
         print(f"  ページ {i + 1} をOCR中...")
 
-        # reader.readtext()は画像を受け取り、認識した文字のリストを返す
-        # 各要素は (座標, テキスト, 信頼度) のタプル
-        results = reader.readtext(img)
-
-        # テキスト部分（インデックス1）だけを取り出して結合する
-        page_text = "\n".join([result[1] for result in results])
+        # run_ocr()がエンジンの差異を吸収して、テキスト文字列のリストを返す
+        texts = run_ocr(reader, img)
+        page_text = "\n".join(texts)
         all_text.append(page_text)
 
         if SAVE_DEBUG:
@@ -180,16 +221,14 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
 
 
 def main():
-    # EasyOCRのReaderを初期化する。日本語('ja')と英語('en')を指定
-    # 初回実行時はモデルファイルをダウンロードするため数分かかる
-    print("EasyOCRを初期化中...")
-    reader = easyocr.Reader(['ja', 'en'])
+    # OCR_ENGINEの設定に応じたエンジンを初期化する
+    reader = init_reader()
 
-    # SAVE_DEBUG=True のとき、実行ごとに「zoom値_日時」のフォルダを作成する
-    # 複数回試したときに上書きされず、倍率や時刻ごとに結果を比較できる
+    # SAVE_DEBUG=True のとき、実行ごとに「エンジン名_zoom値_日時」のフォルダを作成する
+    # エンジン名も含めることで、EasyOCRとPaddleOCRの結果を並べて比較できる
     if SAVE_DEBUG:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = os.path.join(DEBUG_DIR, f"zoom{ZOOM}_{timestamp}")
+        session_dir = os.path.join(DEBUG_DIR, f"{OCR_ENGINE}_zoom{ZOOM}_{timestamp}")
         os.makedirs(session_dir, exist_ok=True)
         print(f"デバッグ出力先: {session_dir}")
     else:

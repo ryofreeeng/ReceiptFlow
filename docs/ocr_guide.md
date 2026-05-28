@@ -6,21 +6,23 @@
 
 ```python
 import fitz
-import easyocr
 import numpy as np
+import cv2
 import os
 import sys
+import datetime
 ```
 
 | インポート | 所属パッケージ | 役割 |
 |---|---|---|
 | `fitz` | PyMuPDF | PDFを開いてページを画像データに変換する |
-| `easyocr` | easyocr | 画像から文字を認識する（OCR） |
-| `np`（numpy） | numpy | 画像データを数値配列として扱う。PyMuPDFとEasyOCRの橋渡し役 |
+| `np`（numpy） | numpy | 画像データを数値配列として扱う。PyMuPDFとOCRエンジンの橋渡し役 |
 | `cv2` | opencv-python | OCR前の画像前処理（グレースケール・2値化・コントラスト・ノイズ除去） |
 | `os` | Python標準 | ファイルパス操作・フォルダ内ファイル一覧の取得 |
 | `sys` | Python標準 | 実行環境の情報（`sys.frozen`・`sys.executable`）を取得 |
 | `datetime` | Python標準 | デバッグ出力フォルダ名に使う日時文字列の生成 |
+
+OCRエンジン（`easyocr`・`paddleocr`）のimportはトップレベルではなく `init_reader()` 内で遅延importしている。選択していないエンジンのパッケージがインストールされていなくてもエラーにならないようにするため。
 
 **なぜパッケージ名が `PyMuPDF` なのに import 名が `fitz` なのか：**  
 `fitz` はMuPDFライブラリの内部名称。PyMuPDFはそのPythonバインディングのため、歴史的経緯でimport名は `fitz` のまま。
@@ -39,10 +41,29 @@ OCR対象のPDFが置かれているフォルダのパス。`BASE_DIR` を起点
 
 ---
 
+### `OCR_ENGINE`
+
+```python
+OCR_ENGINE = "paddleocr"
+```
+
+使用するOCRエンジンを文字列で指定する。**この1行を変えるだけでエンジンを切り替えられる。**
+
+| 値 | エンジン | 特徴 |
+|---|---|---|
+| `"easyocr"` | EasyOCR | インストールが簡単。日英対応。日本語手書き・感熱紙は精度が低い傾向 |
+| `"paddleocr"` | PaddleOCR | 中国Baidu製。日本語精度がEasyOCRより高い傾向。`pip install paddleocr` で導入 |
+| `"tesseract"` | Tesseract | （今後対応予定）Google製。別途バイナリのインストールが必要 |
+| `"manga-ocr"` | manga-ocr | （今後対応予定）日本語特化モデル |
+
+エンジンを追加するときは `init_reader()` と `run_ocr()` にそれぞれelifブロックを1つ追加するだけでよい。
+
+---
+
 ### `ZOOM`
 
 ```python
-ZOOM = 4.0
+ZOOM = 2.0
 ```
 
 PDFのページを画像に変換するときの拡大倍率。`ZOOM=N` にすると解像度が `N × 72 DPI` になる。
@@ -50,8 +71,10 @@ PDFのページを画像に変換するときの拡大倍率。`ZOOM=N` にす�
 | 値 | DPI | OCR精度 | 処理速度 |
 |---|---|---|---|
 | `1.0` | 72 DPI | 低い | 速い |
-| `2.0` | 144 DPI | 普通 | 普通 |
-| `4.0` | 288 DPI | 良好 | 遅い |
+| `2.0` | 144 DPI | 良好（PaddleOCR推奨値） | 普通 |
+| `4.0` | 288 DPI | 2.0との差は限定的 | 大幅に遅い（実測済み） |
+
+**PaddleOCR での推奨値は 2.0**。4.0 は `max_side_limit=4000px` の制限内だが処理時間が大幅に増加し、精度の改善も限定的なため。5.0 以上では内部リサイズが発生する。
 
 **ピクセル数の計算方法**
 
@@ -93,22 +116,27 @@ SAVE_DEBUG = True
 ### 前処理フラグ
 
 ```python
-PREPROCESS_GRAYSCALE = True   # ①グレースケール変換
-PREPROCESS_BINARIZE  = True   # ②2値化（手動しきい値）
-BINARIZE_THRESHOLD   = 220    # しきい値以下のピクセルを黒にする（0〜255）
-PREPROCESS_DENOISE   = True   # ③ノイズ除去
-DENOISE_KERNEL       = 3      # ノイズ除去の探索範囲（奇数：3・5・7）
+PREPROCESS_GRAYSCALE = False  # ①グレースケール変換
+PREPROCESS_BINARIZE  = False  # ②2値化（手動しきい値）
+BINARIZE_THRESHOLD   = 240    # しきい値以下のピクセルを黒にする（0〜255）
+PREPROCESS_DENOISE   = False  # ③ノイズ除去
+DENOISE_KERNEL       = 7      # ノイズ除去の探索範囲（奇数：3・5・7）
+PREPROCESS_ERODE     = False  # ④収縮（黒領域拡張＝文字を太くする）
+ERODE_KERNEL         = 2      # 拡張範囲（N×Nの正方形）
 ```
 
-各フラグを `True`/`False` に切り替えることで、前処理の有無を個別に制御できる。有効にした処理はファイル名ステムに `_gray`・`_bin`・`_dn` のように追記されるため、出力ファイルを見ただけどの前処理が適用されたか分かる。
+各フラグを `True`/`False` に切り替えることで、前処理の有無を個別に制御できる。有効にした処理はファイル名ステムに `_gray`・`_bin`・`_dn`・`_er` のように追記されるため、出力ファイルを見ただけでどの前処理が適用されたか分かる。
 
 | フラグ | ファイル名への追記例 | 効果 |
 |---|---|---|
 | `PREPROCESS_GRAYSCALE` | `_gray` | 彩度を除去し白黒にする |
-| `PREPROCESS_BINARIZE` | `_bin220`（しきい値を末尾に付加） | 明度を0か255の二択にする |
-| `PREPROCESS_DENOISE` | `_dn3`（カーネルサイズを末尾に付加） | 2値化後の孤立したゴミ点を除去する |
+| `PREPROCESS_BINARIZE` | `_bin240`（しきい値を末尾に付加） | 明度を0か255の二択にする |
+| `PREPROCESS_DENOISE` | `_dn7`（カーネルサイズを末尾に付加） | 2値化後の孤立したゴミ点を除去する |
+| `PREPROCESS_ERODE` | `_er2`（カーネルサイズを末尾に付加） | 文字領域を周囲に広げて細い文字を太くする |
 
-例：`receipt_page1_zoom4.0_gray_bin220_dn3.png`
+例：`receipt_page1_zoom2.0_gray_bin240_dn7.png`
+
+> **PaddleOCR 使用時は全フラグを False に設定する**。EasyOCR での検証では前処理が精度向上に寄与したが、PaddleOCR（深層学習モデル）では前処理をするほど精度が下がることを実際に確認した。PaddleOCR にはそのまま自然な画像を渡すのが最善。
 
 ---
 
@@ -251,6 +279,92 @@ img = cv2.medianBlur(img, DENOISE_KERNEL)
 
 ---
 
+## `init_reader()` 関数
+
+```python
+def init_reader():
+    if OCR_ENGINE == "easyocr":
+        import easyocr
+        return easyocr.Reader(['ja', 'en'])
+    elif OCR_ENGINE == "paddleocr":
+        from paddleocr import PaddleOCR
+        return PaddleOCR(use_textline_orientation=True, lang='japan')
+    else:
+        raise ValueError(f"未対応のOCRエンジン: {OCR_ENGINE!r}")
+```
+
+`OCR_ENGINE` の値に応じてOCRエンジンを初期化して返す。`main()` から1回だけ呼ばれる。
+
+**なぜimportをここに書いているか：**  
+トップレベルに `import easyocr` を書くと、EasyOCRが未インストールの環境ではスクリプト起動時点でエラーになる。`init_reader()` 内に書くことで「使うエンジンのパッケージだけが必要」になる（遅延import）。
+
+### PaddleOCR の初期化オプション
+
+```python
+PaddleOCR(use_textline_orientation=True, lang='japan')
+```
+
+| 引数 | 値 | 意味 |
+|---|---|---|
+| `use_textline_orientation` | `True` | テキスト行の向き（0°/180°）を検出する。旧パラメータ `use_angle_cls` は非推奨になったため変更 |
+| `lang` | `'japan'` | 日本語モデルを使う。`'en'` にすると英語専用モデルになる |
+
+初回実行時は言語モデルを自動ダウンロードする（数百MB）。2回目以降はキャッシュを使うため即時起動する。
+
+---
+
+## `run_ocr()` 関数
+
+```python
+def run_ocr(reader, img):
+    if OCR_ENGINE == "easyocr":
+        results = reader.readtext(img)
+        return [r[1] for r in results]
+    elif OCR_ENGINE == "paddleocr":
+        ocr_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img
+        results = list(reader.predict(ocr_img))
+        if not results:
+            return []
+        return results[0].get('rec_texts', [])
+    return []
+```
+
+`OCR_ENGINE` の差異を吸収して、テキスト文字列のリストだけを返す。`extract_text_from_images()` はこの関数しか呼ばないため、エンジンを追加しても呼び出し側のコードは変わらない。
+
+### 各エンジンの戻り値の違い
+
+EasyOCRとPaddleOCRでは認識結果のデータ構造が異なる。`run_ocr()` 内でその差異を吸収している。
+
+**EasyOCR の戻り値：**
+
+```python
+results = reader.readtext(img)
+# 戻り値: [(座標, テキスト, 信頼度), ...]
+# 例: [([[x1,y1],...], "お茶", 0.95), ...]
+# → r[1] でテキストを取り出す
+```
+
+**PaddleOCR の戻り値：**
+
+```python
+results = list(reader.predict(img))
+# predict() はジェネレータを返す。list() で消費して全結果を取得する
+# 旧API: reader.ocr(img, cls=True) → 新API: reader.predict(img)
+#
+# results[0] は辞書。主なキー（実際に確認済み）：
+#   'rec_texts'  : 認識テキストのリスト ← ここを使う
+#   'rec_scores' : 各テキストの信頼度スコア
+#   'dt_polys'   : 検出した文字領域の座標
+#   'textline_orientation_angles' : 各行の角度
+#
+# → results[0].get('rec_texts', []) でテキストリストを取り出す
+```
+
+**なぜPaddleOCRの画像をBGRに変換するか：**  
+PyMuPDFが出力するのはRGBのnumpy配列。前処理でグレースケール（2次元配列）に変換した場合、PaddleOCRがBGR（3次元配列）を期待しているためエラーになる。`cv2.COLOR_GRAY2BGR` でグレースケール→BGRに戻してからOCRに渡す。PaddleOCR使用時は前処理フラグを全てFalseにするため実際にはこの変換は発生しないが、将来的な設定変更に備えて残している。
+
+---
+
 ## `pdf_to_images()` 関数
 
 ```python
@@ -334,8 +448,8 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
     all_text = []
     for i, (img, stem) in enumerate(images_with_stems):
         print(f"  ページ {i + 1} をOCR中...")
-        results = reader.readtext(img)
-        page_text = "\n".join([result[1] for result in results])
+        texts = run_ocr(reader, img)          # エンジンの差異は run_ocr() が吸収する
+        page_text = "\n".join(texts)
         all_text.append(page_text)
         if SAVE_DEBUG:
             with open(os.path.join(session_dir, f"{stem}.txt"), "w", encoding="utf-8") as f:
@@ -343,29 +457,12 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
     return "\n\n".join(all_text)
 ```
 
-**変更点（元の実装との違い）：**
-
-- 引数が `images`（numpy配列のリスト）から `images_with_stems`（`(numpy配列, ステム)` のタプルのリスト）に変わった
+- OCR処理を `run_ocr(reader, img)` に委譲しているため、エンジンを追加・変更してもこの関数は変更不要
 - `SAVE_DEBUG=True` のとき、ページごとのテキストを `{stem}.txt` として保存する。画像と同じステムを使うため対応が一目で分かる
 
-### `reader.readtext(img)`
+### `run_ocr(reader, img)` — エンジン差異の吸収
 
-EasyOCRが画像を解析してテキストを認識するメソッド。戻り値はリストで、各要素は次のタプル：
-
-```python
-(座標, テキスト, 信頼度)
-# 例：([[x1,y1],[x2,y2],[x3,y3],[x4,y4]], "お茶", 0.95)
-```
-
-| 要素 | 型 | 内容 |
-|---|---|---|
-| インデックス0 | リスト | テキストが見つかった領域の4頂点の座標 |
-| インデックス1 | str | 認識されたテキスト文字列 |
-| インデックス2 | float | 認識の信頼度（0〜1。1が最も確実） |
-
-### `[result[1] for result in results]`
-
-リスト内包表記。`results` の各要素（タプル）からインデックス1（テキスト文字列）だけを取り出して新しいリストを作る。C#の `results.Select(r => r[1]).ToList()` と同じ意味。
+EasyOCR と PaddleOCR はメソッド名と戻り値の構造が異なる。`run_ocr()` がその差異を内部に閉じ込め、テキスト文字列のリストだけを返す。詳細は `run_ocr()` のセクション参照。
 
 ### `"\n".join(...)` と `"\n\n".join(...)`
 
@@ -378,14 +475,9 @@ EasyOCRが画像を解析してテキストを認識するメソッド。戻り�
 
 ## `main()` 関数
 
-### `easyocr.Reader(['ja', 'en'])`
+### `init_reader()`
 
-EasyOCRの認識エンジンを初期化する。`['ja', 'en']` は「日本語と英語を認識する」という設定。
-
-- **初回実行時**：認識モデルのファイルをインターネットからダウンロードする（数百MB・数分かかる）
-- **2回目以降**：ダウンロード済みのモデルを使うため即時起動する
-
-他にも方式はあるが、今回は日本語の領収証を対象にしているため `'ja'` は必須。
+`OCR_ENGINE` の設定に応じたエンジンを初期化して返す。`main()` で1回だけ呼び出し、以降は全PDFの処理に同じオブジェクトを使い回す（毎回初期化するとモデルのロードが繰り返されるため）。詳細は `init_reader()` のセクション参照。
 
 ### `[f for f in os.listdir(UNPROCESSED_DIR) if f.lower().endswith(".pdf")]`
 
@@ -411,12 +503,16 @@ numpy配列・RGB（shape: 高さ×幅×3）
     ↓ preprocess_image() で前処理
     ├─ [PREPROCESS_GRAYSCALE] cv2.cvtColor() でグレースケール化（高さ×幅）
     ├─ [PREPROCESS_BINARIZE]  cv2.threshold() で2値化（高さ×幅・白黒のみ）
-    └─ [PREPROCESS_DENOISE]   cv2.medianBlur() でノイズ除去（孤立ゴミ点を消す）
+    ├─ [PREPROCESS_DENOISE]   cv2.medianBlur() でノイズ除去（孤立ゴミ点を消す）
+    └─ [PREPROCESS_ERODE]     cv2.erode() で黒領域を拡張（文字を太くする）
     ├─→ [SAVE_DEBUG] cv2.imwrite() で前処理後画像（PNG）を保存
-    ↓ reader.readtext() でOCR
-[(座標, テキスト, 信頼度), ...] のリスト
+    ↓ run_ocr() でOCR（OCR_ENGINEの設定でエンジンを切り替え）
+    ├─ [easyocr]   reader.readtext() → [(座標, テキスト, 信頼度), ...]
+    └─ [paddleocr] reader.predict()  → [{'rec_texts': [...], 'rec_scores': [...], ...}]
+    ↓ run_ocr() 内でエンジンの差異を吸収
+テキスト文字列のリスト ["行1", "行2", ...]
     ├─→ [SAVE_DEBUG] テキストを .txt ファイルに保存
-    ↓ テキスト部分だけを取り出して結合
+    ↓ 改行で結合
 str（抽出されたテキスト）
 ```
 
