@@ -22,3 +22,6 @@ easyocr
 
 # 画像データを数値配列として扱うライブラリ。PyMuPDFとEasyOCRの橋渡し役（import名: numpy）
 numpy
+
+# 画像の前処理（グレースケール変換・2値化・コントラスト強調・ノイズ除去）に使うライブラリ（import名: cv2）
+opencv-python

@@ -4,6 +4,8 @@ import fitz
 import easyocr
 # 画像データを数値配列として扱うライブラリ。PyMuPDFの出力をEasyOCRが読める形式に変換するために使う
 import numpy as np
+# 画像前処理ライブラリ（グレースケール変換・2値化・コントラスト強調・ノイズ除去に使う）
+import cv2
 import os
 import sys
 import datetime
@@ -26,6 +28,22 @@ ZOOM = 4.0
 
 # Trueにするとページ画像とOCRテキストをセッションフォルダに保存する。精度確認が終わったらFalseにする
 SAVE_DEBUG = True
+
+# --- 前処理フラグ（Trueで有効・Falseで無効。1つずつ試して効果を確認する） ---
+# ①グレースケール変換：カラー→白黒にして文字と背景の境界を単純化する
+PREPROCESS_GRAYSCALE = True
+
+
+def preprocess_image(img):
+    """numpy配列（RGB）に前処理を適用して返す。
+    各フラグがTrueのとき、その処理を順番に適用する。
+    処理を追加するときはここに elif ブロックを足していく。"""
+    if PREPROCESS_GRAYSCALE:
+        # RGB（3チャンネル）→グレースケール（1チャンネル）に変換する
+        # cv2.COLOR_RGB2GRAY：R・G・Bの輝度を人間の目の感度に合わせた比率で合成して1値にする
+        # EasyOCRはグレースケール（2次元配列）もRGB（3次元配列）もどちらも受け付ける
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    return img
 
 
 def pdf_to_images(pdf_path, session_dir):
@@ -58,6 +76,18 @@ def pdf_to_images(pdf_path, session_dir):
 
         # pix.samplesはRGBのバイト列。numpy配列に変換して(高さ, 幅, チャンネル数)の形にする
         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+
+        # 前処理を適用する。どのフラグが有効かをステム名に追記して元画像と区別できるようにする
+        img = preprocess_image(img)
+        if PREPROCESS_GRAYSCALE:
+            stem += "_gray"
+
+        if SAVE_DEBUG:
+            # 前処理後の画像を保存する。元画像（pix.save）とは別ファイルになる
+            # cv2.imwrite()はグレースケール（2次元配列）もRGB（3次元配列）も保存できる
+            cv2.imwrite(os.path.join(session_dir, f"{stem}.png"), img)
+            print(f"  前処理後画像を保存: {stem}.png")
+
         results.append((img, stem))
 
     doc.close()
