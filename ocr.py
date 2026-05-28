@@ -24,7 +24,10 @@ DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
 # この1行を変えるだけでエンジンを切り替えられる
 # "easyocr"  : EasyOCR（日英対応・ローカル実行）
 # "paddleocr": PaddleOCR（日英対応・ローカル実行・EasyOCRより精度が高い傾向）
-# "tesseract"・"manga-ocr" は今後対応予定
+# "manga-ocr": manga-ocr（日本語特化・実装済み）
+#              ※検証済み：領収証全体を1つのテキストブロックとして読むため怪文書レベルの結果になった
+#              　漫画の吹き出し1コマ分を想定したモデルのため全ページ入力には不向き
+# "tesseract": 今後対応予定
 OCR_ENGINE = "paddleocr"
 
 # PDFを画像に変換するときの拡大倍率。値が大きいほど高解像度になりOCR精度が上がるが処理が遅くなる
@@ -113,8 +116,13 @@ def init_reader():
         # ※旧パラメータ use_angle_cls は非推奨になったため use_textline_orientation を使う
         # lang='japan'：日本語モデルを使う（初回実行時にモデルをダウンロードする）
         return PaddleOCR(use_textline_orientation=True, lang='japan')
+    elif OCR_ENGINE == "manga-ocr":
+        from manga_ocr import MangaOcr
+        print("manga-ocrを初期化中...")
+        # 初回実行時はモデルファイルをダウンロードするため数分かかる
+        return MangaOcr()
     else:
-        raise ValueError(f"未対応のOCRエンジン: {OCR_ENGINE!r}。'easyocr' か 'paddleocr' を指定してください")
+        raise ValueError(f"未対応のOCRエンジン: {OCR_ENGINE!r}。'easyocr' / 'paddleocr' / 'manga-ocr' を指定してください")
 
 
 def run_ocr(reader, img):
@@ -136,6 +144,17 @@ def run_ocr(reader, img):
         # predict()の戻り値は辞書のリスト。rec_texts キーにテキスト文字列のリストが入っている
         # その他のキー：rec_scores（信頼度）、dt_polys（検出座標）、rec_polys など
         return results[0].get('rec_texts', [])
+    elif OCR_ENGINE == "manga-ocr":
+        from PIL import Image
+        # manga-ocrはPIL Imageを期待する。numpy配列（RGB）から変換する
+        # グレースケール（2次元配列）の場合はRGBに戻してから変換する
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        pil_img = Image.fromarray(img)
+        # reader(image)で画像全体を1つの文字列として返す（テキスト検出は行わない）
+        # 戻り値は文字列1つ。run_ocr()の戻り値はリストなのでリストに包む
+        result = reader(pil_img)
+        return [result]
     return []
 
 

@@ -27,6 +27,10 @@ paddleocr
 # paddleocr の実行エンジン本体。paddleocr とは別に明示的なインストールが必要
 paddlepaddle
 
+# 日本語特化OCRライブラリ。画像全体を1テキストブロックとして認識する（import名: manga_ocr）
+# OCR_ENGINE = "manga-ocr" のときに使用する
+manga-ocr
+
 # 画像データを数値配列として扱うライブラリ。PyMuPDFとEasyOCRの橋渡し役（import名: numpy）
 numpy
 
