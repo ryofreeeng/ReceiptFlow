@@ -30,7 +30,8 @@ def load_config():
     default = {
         "debit_account": "消耗品費",
         "credit_account": "事業主借",
-        "check_stores": []
+        "check_stores": [],
+        "item_keywords": ["生活白玉", "はちみつ", "生クリーム", "クーベル", "ココア", "三温糖", "うき粉", "バター", "アルミ", "レーヌ", "両面テープ", "ラッピング", "包装紙"]   # 優先採用したい品目名の部分一致キーワード
     }
     return default
 
@@ -170,11 +171,99 @@ def extract_amount(text):
     return None
 
 
-def extract_items(text):
-    """OCRテキストから品目名を抽出してリストで返す。
-    ¥金額の直前の行を品目候補として最大2件を返す。
-    抽出できなかった場合は空リストを返す。"""
-    return []
+# 品目として採用する最大件数（定数）
+_ITEM_MAX = 2
+
+# 品目行から除外するキーワード（割引・袋代など経費計上不要なもの）
+_ITEM_EXCLUDE_WORDS = ["割引", "%", "％", "レジ袋", "買物袋", "買い物袋", "有料レ"]
+
+# 行末の品目価格パターン：
+#   [半角/全角スペース1つ以上] [¥￥任意] [数字とカンマ] [外軽任意]
+# キャプチャグループ1 = スペース直前の最後の非空白文字確認用ではなく品目名境界として使う
+_ITEM_PRICE_RE = re.compile(
+    r'^(.+?)'           # グループ1：品目名部分（1文字以上、最短マッチ）
+    r'[　 ]+'           # 半角/全角スペース1つ以上（品目名と価格の区切り）
+    r'([¥￥]?)'        # グループ2：円マーク（任意）
+    r'([\dO,，]{1,9})'  # グループ3：数字とカンマの並び
+    r'[　 ]?'           # 数字と外・軽の間のスペース（任意）
+    r'([外軽]?)$'       # グループ4：外・軽サフィックス（任意）
+)
+
+
+def _is_item_price_valid(item_name, digits_raw):
+    """価格パターンにマッチした各部分が品目行として有効かを検証する。
+    無効と判断した場合は False を返す。"""
+    # 桁数チェック（カンマを除いて5桁以下）
+    digits_only = re.sub(r'[,，]', '', digits_raw).replace('O', '0').replace('o', '0')
+    if not digits_only.isdigit() or len(digits_only) > 5:
+        return False
+
+    # 品目名の末尾1文字がコロン → 時刻（15:30 など）
+    last_char = item_name.rstrip()[-1] if item_name.rstrip() else ''
+    if last_char in (':', '：'):
+        return False
+
+    # 品目名の末尾1文字がハイフン → 電話番号や割引（090-1234-5678 など）
+    # 「ー」は日本語の長音符（コーヒー・ビールなど）なので除外しない
+    if last_char in ('-', '－'):
+        return False
+
+    return True
+
+
+def extract_items(text, config):
+    """OCRテキストから品目名を抽出してリストで返す（最大 _ITEM_MAX 件）。
+
+    Phase 1：除外キーワード行で打ち切りながら品目候補を収集する。
+    Phase 2：config["item_keywords"] に部分一致するものを優先し、
+             _ITEM_MAX 件になるまで非マッチ品目で補う。
+    抽出できなかった場合は空リストを返す。
+    """
+    keywords = config.get("item_keywords", [])
+
+    # --- Phase 1：候補リストを作る ---
+    candidates = []
+    for line in text.splitlines():
+        # 小計・合計・税などの行が出た時点で品目の記載は終わりと判断して打ち切る
+        if any(ex in line for ex in _EXCLUDE_KEYWORDS) or any(kw in line for kw in _AMOUNT_KEYWORDS):
+            break
+
+        # 割引・袋代など除外ワードを含む行はスキップ
+        if any(w in line for w in _ITEM_EXCLUDE_WORDS):
+            continue
+
+        m = _ITEM_PRICE_RE.match(line)
+        if not m:
+            continue
+
+        item_name, _, digits_raw, _ = m.group(1), m.group(2), m.group(3), m.group(4)
+
+        # 価格部分の妥当性チェック（桁数・コロン・ハイフン）
+        if not _is_item_price_valid(item_name, digits_raw):
+            continue
+
+        # 品目名の前後の空白を除去して候補リストに追加
+        candidates.append(item_name.strip())
+
+    # --- Phase 2：キーワード優先で最大 _ITEM_MAX 件を選ぶ ---
+    selected = []
+    non_kw = []   # キーワード非マッチのバッファ（補欠用）
+
+    for item in candidates:
+        if any(kw in item for kw in keywords):
+            selected.append(item)
+            if len(selected) >= _ITEM_MAX:
+                return selected   # キーワードマッチが揃った時点で確定
+        else:
+            non_kw.append(item)
+
+    # キーワードマッチが _ITEM_MAX 未満の場合は非マッチ品目で補う
+    for item in non_kw:
+        if len(selected) >= _ITEM_MAX:
+            break
+        selected.append(item)
+
+    return selected
 
 
 def extract_store_name(text):
@@ -194,11 +283,11 @@ def build_record(filename, text, config):
     """1枚分の OCR テキストから抽出情報をまとめた辞書を返す。
     各抽出関数を呼び出してまとめる役割だけを持つ。"""
     store = extract_store_name(text)
-    items = extract_items(text)
+    items = extract_items(text, config)
 
-    # 品目リストを「卵、生クリーム等」の形式に整形する
+    # 品目リストを「卵、生クリームなど」の形式に整形する
     if items:
-        summary = "、".join(items) + "等"
+        summary = "、".join(items) + "など"
     else:
         summary = store or "（品目不明）"
 

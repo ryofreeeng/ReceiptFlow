@@ -20,6 +20,19 @@ import datetime
 | `re` | Python標準 | 正規表現によるパターンマッチ。`re.search()` で文字列の中から日付を探す |
 | `datetime` | Python標準 | 日付を表す `datetime.date` 型を作る。`datetime.date(2025, 5, 26)` のように使う |
 
+### Python機能の種別早見表
+
+「標準」「組み込み」「サードパーティ」の3種類があり、`pip install` が必要かどうかが違う。
+
+| 種別 | 意味 | `pip install` | 例 |
+|---|---|---|---|
+| **組み込み（built-in）** | `import` なしでいつでも使える | 不要 | `int()`, `str()`, `len()`, `any()`, `all()`, `enumerate()`, `sorted()`, `print()`, `input()` / 文字列メソッド `.split()`, `.replace()`, `.strip()`, `.isdigit()` など |
+| **標準ライブラリ** | `import` は必要だが Python 付属 | 不要 | `re`（正規表現）, `os`（ファイル操作）, `sys`（実行環境）, `json`（JSON読み書き）, `datetime`（日付） |
+| **サードパーティ** | 別途インストールが必要 | **必要** | `openpyxl`（Excel読み書き・未実装） |
+
+→ このファイルで登場する `re.search()`・`os.path.join()`・`datetime.date()` はすべて「標準ライブラリ」。  
+→ `int()`・`str()`・`any()`・文字列メソッドはすべて「組み込み」。
+
 ---
 
 ## パス定数
@@ -186,8 +199,10 @@ def extract_date(text):
 - `KeyError`：`_ERA_OFFSETS["明治"]` のように辞書にないキーを参照したときに発生する（未対応の元号への保険）
 - `continue` は「このパターンを諦めて次のパターンへ進む」という意味
 
-**`str(converter(m))` とは**：変換関数の戻り値（`datetime.date`）を文字列に変換する。  
-`str(datetime.date(2025, 5, 26))` → `"2025-05-26"` になる。
+**`str(converter(m))` とは**（組み込み）：変換関数の戻り値（`datetime.date` オブジェクト）を文字列に変換する。  
+`str(datetime.date(2025, 5, 26))` → `"2025-05-26"` になる。  
+`datetime.date` は Python の `__str__` という特殊メソッドが `"YYYY-MM-DD"` 形式を返すよう設計されているため、`str()` を通すだけでこの形式になる。  
+C# の `date.ToString("yyyy-MM-dd")` に相当（ただし書式を指定しなくてよいのが違い）。
 
 ## 合計金額抽出の実装
 
@@ -222,8 +237,17 @@ def _to_int(s):
 
 **役割**：`"1,580"` や `"1O580"` のような汚れた数字文字列を整数に変換する共通処理。
 
-**`re.sub(r'[,，]', '', s)` とは**：半角カンマ `,` と全角カンマ `，` をまとめて除去する。  
-`re.sub(パターン, 置換後, 対象)` は C# の `Regex.Replace(対象, パターン, 置換後)` に相当。
+**`.replace(置換前, 置換後)` とは**（組み込み・文字列メソッド）：文字列内の特定の文字列を別の文字列に置き換えた新しい文字列を返す（元の文字列は変えない）。  
+`"1O580".replace('O', '0')` → `"10580"`。  
+C# の `string.Replace()` と同じ。  
+正規表現を使う `re.sub()` と違い、固定文字列の単純置換に使う。
+
+**`re.sub(r'[,，]', '', s)` とは**（標準ライブラリ `re`）：半角カンマ `,` と全角カンマ `，` をまとめて除去する。  
+`re.sub(パターン, 置換後, 対象)` は C# の `Regex.Replace(対象, パターン, 置換後)` に相当。  
+引数の順番が C# と逆なので注意（Python は「パターン→置換後→対象」、C# は「対象→パターン→置換後」）。
+
+**`int(s)` とは**（組み込み）：文字列を整数に変換する関数。変換できない文字が含まれると `ValueError` を発生させる。  
+C# の `int.Parse(s)` に相当（失敗したとき例外を投げるのも同じ）。
 
 ---
 
@@ -289,18 +313,222 @@ C# でいう `_AMOUNT_KEYWORDS.Any(kw => line.Contains(kw))` に相当。
 フォントサイズの違いにより OCR の検出モデルが「合計」と「¥1,580」を別領域として検出し、  
 行マージ後も別行になることがある。その場合の保険として直後の行も確認する。
 
-## 情報抽出関数（残りはスタブ）
+## 品目名抽出の実装
 
-### `extract_items(text)`
+### `_ITEM_MAX`・`_ITEM_EXCLUDE_WORDS`・`_ITEM_PRICE_RE`
 
 ```python
-def extract_items(text):
-    return []
+_ITEM_MAX = 2
+
+_ITEM_EXCLUDE_WORDS = ["割引", "%", "％", "レジ袋", "買物袋", "買い物袋", "有料レ"]
+
+_ITEM_PRICE_RE = re.compile(
+    r'^(.+?)'           # グループ1：品目名部分（1文字以上、最短マッチ）
+    r'[　 ]+'           # 半角/全角スペース1つ以上（品目名と価格の区切り）
+    r'([¥￥]?)'        # グループ2：円マーク（任意）
+    r'([\dO,，]{1,9})'  # グループ3：数字とカンマの並び
+    r'[　 ]?'           # 数字と外・軽の間のスペース（任意）
+    r'([外軽]?)$'       # グループ4：外・軽サフィックス（任意）
+)
 ```
 
-**役割**：OCRテキストから品目名をリストで返す（最大2件）。  
-**今後の実装予定**：「¥」または数字+単位が続く行の直前の行を品目名として取得する。  
-→ 領収証では品目と金額が別行に並ぶ構造のため、「金額行の1つ前の行が品目名」というパターンで探す。
+**`_ITEM_MAX = 2`**：採用する品目名の最大件数を定数にしている。  
+数値をコードに直接書く（マジックナンバー）と後で変更が難しいため、定数として名前をつける。  
+C# でいう `const int ItemMax = 2;` に相当。
+
+**`_ITEM_EXCLUDE_WORDS`**：レシートに含まれるが経費計上に不要な行を除外するためのリスト。  
+割引（マイナス金額）・袋代などが対象。`"有料レ"` は `"有料レジ袋"` の OCR 誤読バリアント。
+
+**`re.compile()` とは**（標準ライブラリ `re`）：正規表現パターンをあらかじめコンパイル（解析・最適化）して「正規表現オブジェクト」に変換する。  
+`re.search(パターン, 行)` と毎回書く代わりに、1回コンパイルしておけば繰り返し使うとき速くなる。  
+また長いパターンを複数の raw 文字列に分けて書ける（Python が自動で連結する）のも利点。  
+C# でいう `new Regex(pattern)` に相当。
+
+```python
+# コンパイルせずに毎回書く書き方（短いパターンなら問題ない）
+re.search(r'\d+', line)
+
+# コンパイルして使う書き方（長いパターン・繰り返し使う場合）
+MY_RE = re.compile(r'\d+')
+MY_RE.search(line)   # ← オブジェクト.search() で呼び出す
+MY_RE.match(line)    # ← オブジェクト.match() で呼び出す
+```
+
+**`.match()` と `.search()` の違い**：
+
+| メソッド | マッチ位置 | C# の対応 |
+|---|---|---|
+| `.search(line)` | 行の**どこにでも**マッチ | `Regex.Match(text, pattern)` |
+| `.match(line)` | 行の**先頭から**マッチ（`^` と同じ）| `Regex.Match(text, pattern)` の Position=0 |
+
+`_ITEM_PRICE_RE` はパターンが `^` で始まるため `.match()` を使う。  
+`^` がある時点で「行頭から」を要求しているので `.search()` でも結果は同じだが、  
+意図を明確にするため先頭マッチには `.match()` を使うのが慣習。
+
+**`_ITEM_PRICE_RE` の正規表現**：「品目名 ＋ スペース ＋ 価格」の構造を1行まとめてマッチさせる。
+
+| 部分 | 内容 | 例 |
+|---|---|---|
+| `^(.+?)` | 行頭から始まる品目名（最短マッチ） | `卵`、`生クリーム` |
+| `[　 ]+` | 半角・全角スペース1つ以上 | 品目と価格の区切り |
+| `([¥￥]?)` | 円マーク（ある場合もない場合も） | `¥` または空 |
+| `([\dO,，]{1,9})` | 数字・O・カンマの組み合わせ（1〜9文字） | `210`、`1,580`、`21O` |
+| `[　 ]?` | 外・軽の前のスペース（任意） | `¥210 軽` の空白 |
+| `([外軽]?)$` | 軽減税率（軽）・税抜（外）のサフィックス（任意） | `軽`、`外` または空 |
+
+**`(.+?)` の「最短マッチ」とは**：`?` を量詞の直後に付けると「できるだけ短くマッチさせる」という意味になる。  
+最長マッチ（デフォルト）だと品目名がスペースを飲み込みすぎて境界がずれることがある。
+
+---
+
+### `_is_item_price_valid(item_name, digits_raw)`
+
+```python
+def _is_item_price_valid(item_name, digits_raw):
+    digits_only = re.sub(r'[,，]', '', digits_raw).replace('O', '0').replace('o', '0')
+    if not digits_only.isdigit() or len(digits_only) > 5:
+        return False
+
+    last_char = item_name.rstrip()[-1] if item_name.rstrip() else ''
+    if last_char in (':', '：'):
+        return False
+    if last_char in ('-', '－'):
+        return False
+
+    return True
+```
+
+**役割**：正規表現にマッチした行が本当に品目行かを追加検証する。
+
+**`.rstrip()` とは**（組み込み・文字列メソッド）：文字列の**末尾**の空白（スペース・タブ）を除去した文字列を返す（元の文字列は変えない）。  
+`.strip()` は先頭と末尾の両方、`.rstrip()` は末尾のみ（Right strip）、`.lstrip()` は先頭のみ。  
+C# の `TrimEnd()` に相当（`.strip()` は `Trim()`）。
+
+**`[-1]` とは**（組み込み）：文字列やリストの**最後の要素**を取り出すインデックス。  
+`"コーヒー"[-1]` → `"ー"`、`"合計"[-1]` → `"計"` のように動く。  
+C# の `str[str.Length - 1]` と同じ意味。
+
+**`item_name.rstrip()[-1] if item_name.rstrip() else ''` とは**（組み込み・三項演算子）：  
+Python の三項演算子は `値A if 条件 else 値B` という語順で書く。  
+「`item_name.rstrip()` が空文字でなければ `[-1]`、空文字なら `''`」という意味。  
+空文字に `[-1]` をするとエラー（`IndexError`）になるため、空チェックを先に行っている。  
+C# の `条件 ? 値A : 値B` と同じ仕組みだが **語順が逆**なので注意。
+
+**`last_char in (':', '：')` とは**（組み込み）：`in` でタプル（`(...)` で作る順序付きコレクション）の中に含まれるかを判定する。  
+`last_char == ':' or last_char == '：'` と書いても同じだが、候補が複数あるときは `in (...)` のほうが短く書ける。  
+C# でいう `new[] { ':', '：' }.Contains(lastChar)` に相当。
+
+**検証内容**：
+
+| 条件 | 理由 |
+|---|---|
+| 数字が5桁以下 | 6桁以上は合計金額や電話番号の一部の可能性が高い |
+| 品目名末尾がコロンでない | `15:30` などの時刻を除外するため |
+| 品目名末尾がハイフンでない | `090-1234` などの電話番号途中を除外するため |
+
+**なぜ「ー」（長音符）はハイフン扱いしないか**：  
+「コーヒー」「ビール」のように品目名の末尾が長音符で終わることがあるため。  
+ASCIIの `-`（U+002D）と全角 `-`（U+FF0D）のみをハイフンとして扱う。
+
+---
+
+### `extract_items(text, config)`（実装済み）
+
+```python
+def extract_items(text, config):
+    keywords = config.get("item_keywords", [])
+
+    # --- Phase 1：候補リストを作る ---
+    candidates = []
+    for line in text.splitlines():
+        if any(ex in line for ex in _EXCLUDE_KEYWORDS) or any(kw in line for kw in _AMOUNT_KEYWORDS):
+            break
+        if any(w in line for w in _ITEM_EXCLUDE_WORDS):
+            continue
+        m = _ITEM_PRICE_RE.match(line)
+        if not m:
+            continue
+        item_name, _, digits_raw, _ = m.group(1), m.group(2), m.group(3), m.group(4)
+        if not _is_item_price_valid(item_name, digits_raw):
+            continue
+        candidates.append(item_name.strip())
+
+    # --- Phase 2：キーワード優先で最大 _ITEM_MAX 件を選ぶ ---
+    selected = []
+    non_kw = []
+
+    for item in candidates:
+        if any(kw in item for kw in keywords):
+            selected.append(item)
+            if len(selected) >= _ITEM_MAX:
+                return selected
+        else:
+            non_kw.append(item)
+
+    for item in non_kw:
+        if len(selected) >= _ITEM_MAX:
+            break
+        selected.append(item)
+
+    return selected
+```
+
+**役割**：OCRテキストから品目名を抽出して最大 `_ITEM_MAX`（2）件のリストで返す。
+
+**`item_name, _, digits_raw, _ = m.group(1), m.group(2), m.group(3), m.group(4)` とは**：  
+右辺の4つの値を左辺の4つの変数に同時に代入する（**アンパック代入**）。  
+`_`（アンダースコア）は「この値は使わない」という慣習的な捨て変数名。  
+グループ2（円マーク）とグループ4（外・軽）は取り出せるが `extract_items` では使わないため `_` に代入して捨てている。  
+C# では捨て変数を `_` で表す `out _` に近い。
+
+```python
+# アンパック代入のイメージ（C# のタプル分解と同じ）
+a, b, c = (1, 2, 3)   # a=1, b=2, c=3
+a, _, c = (1, 2, 3)   # a=1, 2は捨て, c=3
+```
+
+**`.append(要素)` とは**（組み込み・リストメソッド）：リストの末尾に1件追加する。  
+C# の `list.Add(item)` に相当。
+
+**`.strip()` とは**（組み込み・文字列メソッド）：文字列の先頭・末尾の空白を除去する。  
+正規表現が拾った品目名に前後の空白が残っていることがあるため除去している。  
+C# の `Trim()` に相当。
+
+**Phase 1 の打ち切り条件**：  
+`_EXCLUDE_KEYWORDS`（小計・消費税など）または `_AMOUNT_KEYWORDS`（合計・TOTALなど）を含む行が出た時点で `break` する。  
+→ 小計行・合計行より下に品目は来ないため。
+
+**`break` と `continue` の違い**（組み込み）：
+
+| キーワード | 動作 | C# の対応 |
+|---|---|---|
+| `break` | ループ全体をその場で終了する | `break;` と同じ |
+| `continue` | 今の1回だけスキップして次のループへ進む | `continue;` と同じ |
+
+このコードでの使い分け：合計行が出たら「もう後ろに品目は来ない」ので `break`（ループ終了）。  
+割引行は「この行だけ飛ばせばいい」ので `continue`（次の行へ）。
+
+**Phase 2 のキーワード優先ロジック**：
+
+```
+candidates（Phase1で収集した品目候補）を順番に見ていく
+  ├ config["item_keywords"] に部分一致 → selected に追加（_ITEM_MAX に達したら即返す）
+  └ 非マッチ → non_kw（補欠リスト）に保留
+
+selected が _ITEM_MAX 未満なら non_kw の先頭から補充
+```
+
+例：`item_keywords = ["クリーム", "みつ"]`、`candidates = ["卵", "生クリーム", "はちみつ"]` の場合：
+- 卵 → non_kw へ
+- 生クリーム → selected へ（"クリーム" に部分一致）
+- はちみつ → selected へ（"みつ" に部分一致）→ `_ITEM_MAX` 到達、即返す
+- 結果：`["生クリーム", "はちみつ"]`
+
+**`config.get("item_keywords", [])` とは**：  
+辞書の `get(キー, デフォルト値)` は、キーが存在しない場合にデフォルト値を返す。  
+`config["item_keywords"]` と違い、キーがなくても `KeyError` を起こさない。
+
+## 情報抽出関数（スタブ）
 
 ### `extract_store_name(text)`
 
@@ -333,14 +561,18 @@ def needs_review(store_name, check_stores):
 ```python
 def build_record(filename, text, config):
     store = extract_store_name(text)
-    items = extract_items(text)
+    items = extract_items(text, config)
 
     if items:
-        summary = "、".join(items) + "等"
+        summary = "、".join(items) + "など"
     else:
         summary = store or "（品目不明）"
 
     amount = extract_amount(text)
+
+    review = needs_review(store, config["check_stores"])
+    if amount is not None and amount < 100:
+        review = True
 
     return {
         "filename":       filename,
@@ -350,11 +582,15 @@ def build_record(filename, text, config):
         "debit_amount":   amount,
         "credit_account": config["credit_account"],
         "credit_amount":  amount,
-        "needs_review":   needs_review(store, config["check_stores"]),
+        "needs_review":   review,
     }
 ```
 
 **役割**：1枚分の OCR テキストから各抽出関数を呼び出し、1件分の仕訳データをまとめた辞書にして返す。
+
+**`amount < 100` で `review = True` にする理由**：  
+OCR のスペース混入により `"2,243"` が `"2 243"` のように分割されると、`_parse_amount()` が `2` を返してしまう。  
+100 円未満はほぼあり得ないため、フラグを立てて後で確認できるようにしている。
 
 ### `"、".join(items)` とは
 
