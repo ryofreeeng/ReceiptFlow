@@ -189,18 +189,107 @@ def extract_date(text):
 **`str(converter(m))` とは**：変換関数の戻り値（`datetime.date`）を文字列に変換する。  
 `str(datetime.date(2025, 5, 26))` → `"2025-05-26"` になる。
 
-## 情報抽出関数（残りはスタブ）
+## 合計金額抽出の実装
 
-### `extract_amount(text)`
+### `_AMOUNT_KEYWORDS` / `_EXCLUDE_KEYWORDS`
 
 ```python
-def extract_amount(text):
+_AMOUNT_KEYWORDS  = ["合計", "信計", "取引金額", "金额", "金額", "お会計", "TOTAL", "Total", "言十"]
+_EXCLUDE_KEYWORDS = ["小計", "小言十", "税抜", "消費税", "内税", "外税", "品名", "内訳"]
+```
+
+**`_AMOUNT_KEYWORDS`**：実際のレシートに書かれている表記 ＋ OCR 誤読バリアントを含む。  
+- `信計`・`取引金額`・`金額` はレシートに実際に書いてある表記
+- `言十` は `計`（= `言` ＋ `十` の構造の漢字）が OCR で分解されて読まれたもの
+
+**`_EXCLUDE_KEYWORDS`**：小計・消費税など合計ではない行を除外するためのリスト。  
+- `小言十` は `小計` の OCR 誤読（`計` → `言十`）
+
+---
+
+### `_to_int(s)`
+
+```python
+def _to_int(s):
+    s = s.replace('O', '0').replace('o', '0')
+    s = re.sub(r'[,，]', '', s)
+    try:
+        v = int(s)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+```
+
+**役割**：`"1,580"` や `"1O580"` のような汚れた数字文字列を整数に変換する共通処理。
+
+**`re.sub(r'[,，]', '', s)` とは**：半角カンマ `,` と全角カンマ `，` をまとめて除去する。  
+`re.sub(パターン, 置換後, 対象)` は C# の `Regex.Replace(対象, パターン, 置換後)` に相当。
+
+---
+
+### `_parse_amount(line)`
+
+```python
+def _parse_amount(line):
+    # ¥ ￥ \ の直後の数字を優先
+    m = re.search(r'[¥￥\\]\s*([\dO,，]+)', line)
+    if m:
+        val = _to_int(m.group(1))
+        if val is not None:
+            return val
+    # ¥ なし：行内の全数字列を探し、10 以上の最初のものを返す
+    for m in re.finditer(r'[\dO,，]+', line):
+        val = _to_int(m.group())
+        if val is not None and val >= 10:
+            return val
     return None
 ```
 
-**役割**：OCRテキストから**合計金額**を整数で返す。  
-**今後の実装予定**：「合計」「お会計」「TOTAL」などのキーワードの後に続く数字を正規表現で探す。  
-金額の末尾には「外」「軽」「※」が付く場合があるため、数字以外の1文字が続いてもマッチできるように書く。
+**役割**：1行から金額数値を取り出して整数で返す。
+
+**優先順序の設計理由**：
+
+1. `¥/￥/\` の直後を優先する  
+   → `合計 3品目 ¥1,580` のような行で `3`（品目数）ではなく `1580` を取れる
+
+2. `¥` がない行では `>= 10` の数字を返す  
+   → `3`（品目数）や `8`（税率）などの1桁数値を誤って金額として返さないようにする
+
+**`re.finditer()` とは**：行内の全マッチを順番に返すイテレータ。  
+`re.search()` が最初の1件しか返さないのに対し、`finditer()` は全件を返す。  
+C# でいう `Regex.Matches()` に相当。
+
+---
+
+### `extract_amount(text)`（実装済み）
+
+```python
+def extract_amount(text):
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if any(ex in line for ex in _EXCLUDE_KEYWORDS):
+            continue
+        if any(kw in line for kw in _AMOUNT_KEYWORDS):
+            amount = _parse_amount(line)
+            if amount is not None:
+                return amount
+            if i + 1 < len(lines):
+                amount = _parse_amount(lines[i + 1])
+                if amount is not None:
+                    return amount
+    return None
+```
+
+**`any(kw in line for kw in _AMOUNT_KEYWORDS)` とは**：  
+リストの中に1つでも条件を満たすものがあれば `True` を返す。  
+C# でいう `_AMOUNT_KEYWORDS.Any(kw => line.Contains(kw))` に相当。  
+`all()` は全部が条件を満たすときに `True`（C# の `All()`）。
+
+**フェーズ2（次の行を見る）の設計理由**：  
+フォントサイズの違いにより OCR の検出モデルが「合計」と「¥1,580」を別領域として検出し、  
+行マージ後も別行になることがある。その場合の保険として直後の行も確認する。
+
+## 情報抽出関数（残りはスタブ）
 
 ### `extract_items(text)`
 

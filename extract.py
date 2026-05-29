@@ -106,10 +106,67 @@ def extract_date(text):
     return None
 
 
+# 合計金額を示すキーワード（実際の表記 + OCR誤読バリアントを含む）
+_AMOUNT_KEYWORDS  = ["合計", "信計", "取引金額", "金额", "金額", "お会計", "TOTAL", "Total", "言十"]
+
+# 合計ではなく小計・税額などを示すキーワード（誤マッチを防ぐために除外する）
+# 「小言十」は「小計」の OCR 誤読（計 → 言十）
+_EXCLUDE_KEYWORDS = ["小計", "小言十", "税抜", "消費税", "内税", "外税", "品名", "内訳"]
+
+
+def _to_int(s):
+    """数字文字列（カンマ混じり・OCR誤読 O 含む）を整数に変換する。変換できなければ None。"""
+    s = s.replace('O', '0').replace('o', '0')
+    s = re.sub(r'[,，]', '', s)   # 半角・全角カンマを除去
+    try:
+        v = int(s)
+        return v if v > 0 else None
+    except ValueError:
+        return None
+
+
+def _parse_amount(line):
+    """1行から金額を取り出して整数で返す。見つからなければ None。
+
+    優先順：
+      1. ¥/￥/\ の直後の数字（最も確実）
+      2. ¥ なし：行内の数字列を先頭から順に試し、10 以上の最初のものを返す
+         （品目数などの 1〜2 桁を除外するため）
+    """
+    # ¥ ￥ \ の直後の数字を優先
+    m = re.search(r'[¥￥\\]\s*([\dO,，]+)', line)
+    if m:
+        val = _to_int(m.group(1))
+        if val is not None:
+            return val
+    # ¥ なし：行内の全数字列を探し、10 以上の最初のものを返す
+    for m in re.finditer(r'[\dO,，]+', line):
+        val = _to_int(m.group())
+        if val is not None and val >= 10:
+            return val
+    return None
+
+
 def extract_amount(text):
     """OCRテキストから合計金額を抽出して整数で返す。
-    「合計」「お会計」「TOTAL」などのキーワードの後に続く数字を探す。
+    合計・信計・TOTALなどのキーワードの後に続く数字を探す。
+    キーワード行に数字がない場合は次の行も確認する（行マージが効かない場合の保険）。
     抽出できなかった場合は None を返す。"""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        # 小計・消費税など合計ではない行をスキップ
+        if any(ex in line for ex in _EXCLUDE_KEYWORDS):
+            continue
+        if any(kw in line for kw in _AMOUNT_KEYWORDS):
+            # フェーズ1：同じ行から金額を探す
+            amount = _parse_amount(line)
+            if amount is not None:
+                return amount
+            # フェーズ2：行マージが効かず別行になった場合の保険として次の行を確認する
+            if i + 1 < len(lines):
+                amount = _parse_amount(lines[i + 1])
+                if amount is not None:
+                    return amount
     return None
 
 
@@ -147,6 +204,11 @@ def build_record(filename, text, config):
 
     amount = extract_amount(text)
 
+    # 店舗名が要チェックリストに含まれる、または金額が100円未満（OCRのスペース混入等で抽出失敗の疑い）
+    review = needs_review(store, config["check_stores"])
+    if amount is not None and amount < 100:
+        review = True
+
     return {
         "filename":       filename,
         "date":           extract_date(text),
@@ -155,7 +217,7 @@ def build_record(filename, text, config):
         "debit_amount":   amount,
         "credit_account": config["credit_account"],
         "credit_amount":  amount,               # 借り方と同じ金額を使う
-        "needs_review":   needs_review(store, config["check_stores"]),
+        "needs_review":   review,
     }
 
 
