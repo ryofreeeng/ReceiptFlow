@@ -53,8 +53,8 @@ OCR_ENGINE = "paddleocr"
 |---|---|---|
 | `"easyocr"` | EasyOCR | インストールが簡単。日英対応。日本語手書き・感熱紙は精度が低い傾向 |
 | `"paddleocr"` | PaddleOCR | 中国Baidu製。日本語精度がEasyOCRより高い傾向。`pip install paddleocr` で導入 |
+| `"manga-ocr"` | manga-ocr | 実装済み・検証済み。領収証全体に不向き（漫画吹き出し1コマ想定のモデルのため怪文書レベルの出力になった） |
 | `"tesseract"` | Tesseract | （今後対応予定）Google製。別途バイナリのインストールが必要 |
-| `"manga-ocr"` | manga-ocr | （今後対応予定）日本語特化モデル |
 
 エンジンを追加するときは `init_reader()` と `run_ocr()` にそれぞれelifブロックを1つ追加するだけでよい。
 
@@ -109,7 +109,7 @@ DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
 SAVE_DEBUG = True
 ```
 
-`True` のとき、OCRに渡す前の画像（PNG）とOCR結果（TXT）をセッションフォルダに保存する。精度確認が終わったら `False` にすると出力しなくなる。
+`True` のとき、OCRに渡す前の画像（PNG）・OCR結果（TXT）・信頼度（`_scores.txt`）をセッションフォルダに保存する。精度確認が終わったら `False` にすると出力しなくなる。
 
 ---
 
@@ -350,6 +350,9 @@ def init_reader():
     elif OCR_ENGINE == "paddleocr":
         from paddleocr import PaddleOCR
         return PaddleOCR(use_textline_orientation=True, lang='japan')
+    elif OCR_ENGINE == "manga-ocr":
+        from manga_ocr import MangaOcr
+        return MangaOcr()
     else:
         raise ValueError(f"未対応のOCRエンジン: {OCR_ENGINE!r}")
 ```
@@ -378,23 +381,122 @@ PaddleOCR(use_textline_orientation=True, lang='japan')
 
 ```python
 def run_ocr(reader, img):
+    # 戻り値: (texts, debug_pairs) のタプル
     if OCR_ENGINE == "easyocr":
         results = reader.readtext(img)
-        return [r[1] for r in results]
+        texts = [r[1] for r in results]
+        debug_pairs = [(r[1], r[2]) for r in results]
+        return texts, debug_pairs
     elif OCR_ENGINE == "paddleocr":
         ocr_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img
         results = list(reader.predict(ocr_img))
         if not results:
-            return []
-        return results[0].get('rec_texts', [])
-    return []
+            return [], None
+        raw_texts = results[0].get('rec_texts', [])
+        scores    = results[0].get('rec_scores', [])
+        polys     = results[0].get('dt_polys', [])
+        debug_pairs = list(zip(raw_texts, scores)) if scores else None
+        if POSTPROCESS_MERGE_LINES and polys:
+            return merge_lines_by_coord(raw_texts, polys), debug_pairs
+        return raw_texts, debug_pairs
+    elif OCR_ENGINE == "manga-ocr":
+        from PIL import Image
+        if img.ndim == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        pil_img = Image.fromarray(img)
+        result = reader(pil_img)
+        return [result], None
+    return [], None
 ```
 
-`OCR_ENGINE` の差異を吸収して、テキスト文字列のリストだけを返す。`extract_text_from_images()` はこの関数しか呼ばないため、エンジンを追加しても呼び出し側のコードは変わらない。
+`OCR_ENGINE` の差異を吸収して、テキストリストと信頼度ペアリストを **まとめて** 返す。`extract_text_from_images()` はこの関数しか呼ばないため、エンジンを追加しても呼び出し側のコードは変わらない。
+
+---
+
+### 戻り値がタプルになった理由
+
+以前は `return texts` だけで「テキストのリスト」を1つ返していた。今回から信頼度情報も一緒に返す必要が出てきたため、2つの値をまとめて返す形に変えた。
+
+```python
+return texts, debug_pairs  # Pythonではカンマで並べるだけでタプルになる
+```
+
+Pythonでは `return A, B` と書くと自動的に `(A, B)` のタプルとして返される。C#の `ValueTuple` や `out` 引数に相当する。
+
+---
+
+### `debug_pairs` の中身
+
+| エンジン | `debug_pairs` の中身 |
+|---|---|
+| EasyOCR | `[(テキスト, 信頼度), ...]` — 各検出領域のペア |
+| PaddleOCR | `[(テキスト, 信頼度), ...]` — **行マージ前**の生検出データ |
+| manga-ocr | `None` — 信頼度を返さないエンジン |
+
+PaddleOCR で `POSTPROCESS_MERGE_LINES=True` のとき、テキストは行マージ済みになるが、信頼度は **マージ前の生検出領域ごと** のスコアのまま。マージすると複数の検出領域が1行にまとまるため、テキストとスコアの個数が一致しなくなる。信頼度ファイルに「行マージ前の生検出データ」と注記しているのはこのため。
+
+---
+
+### `[(r[1], r[2]) for r in results]` — タプルを要素とするリスト内包表記
+
+```python
+debug_pairs = [(r[1], r[2]) for r in results]
+```
+
+リスト内包表記（`[式 for 変数 in リスト]`）の各要素をタプルにした形。
+
+EasyOCRの戻り値 `results` は `(座標, テキスト, 信頼度)` のタプルが並んだリスト：
+```
+results = [
+    ([[x1,y1],...], "〇〇スーパー", 0.987),
+    ([[x1,y1],...], "2025年05月",   0.923),
+    ...
+]
+```
+
+これを `(テキスト, 信頼度)` のペアだけのリストに変換している：
+```
+debug_pairs = [
+    ("〇〇スーパー", 0.987),
+    ("2025年05月",   0.923),
+    ...
+]
+```
+
+`r[1]` は「2番目（テキスト）」、`r[2]` は「3番目（信頼度）」。
+
+---
+
+### `zip()` — 2つのリストを1対1でペアにする
+
+```python
+debug_pairs = list(zip(raw_texts, scores))
+```
+
+`zip(A, B)` は2つのリストの対応する要素をペアにする関数。C#の `A.Zip(B)` と同じ。
+
+```python
+raw_texts = ["〇〇スーパー", "2025年05月", "弁当"]
+scores    = [0.987,         0.923,        0.945]
+
+list(zip(raw_texts, scores))
+# → [("〇〇スーパー", 0.987), ("2025年05月", 0.923), ("弁当", 0.945)]
+```
+
+**なぜ `list()` で包むか：**  
+`zip()` 単体は「ジェネレータ」を返す。ジェネレータは要素を1つずつ取り出す仕組みで、一度使い切ると空になる。`list()` で包むことで普通のリストに変換し、何度でも参照できるようになる。
+
+**`if scores else None` の部分：**
+
+```python
+debug_pairs = list(zip(raw_texts, scores)) if scores else None
+```
+
+「`scores` が空でなければ zip する、空なら `None` にする」という **三項演算子**。Pythonの三項演算子は `真のときの値 if 条件 else 偽のときの値` という語順になる（C#の `条件 ? 真 : 偽` と逆順なので注意）。
+
+---
 
 ### 各エンジンの戻り値の違い
-
-EasyOCRとPaddleOCRでは認識結果のデータ構造が異なる。`run_ocr()` 内でその差異を吸収している。
 
 **EasyOCR の戻り値：**
 
@@ -402,7 +504,7 @@ EasyOCRとPaddleOCRでは認識結果のデータ構造が異なる。`run_ocr()
 results = reader.readtext(img)
 # 戻り値: [(座標, テキスト, 信頼度), ...]
 # 例: [([[x1,y1],...], "お茶", 0.95), ...]
-# → r[1] でテキストを取り出す
+# → r[1] でテキスト、r[2] で信頼度を取り出す
 ```
 
 **PaddleOCR の戻り値：**
@@ -413,12 +515,10 @@ results = list(reader.predict(img))
 # 旧API: reader.ocr(img, cls=True) → 新API: reader.predict(img)
 #
 # results[0] は辞書。主なキー（実際に確認済み）：
-#   'rec_texts'  : 認識テキストのリスト ← ここを使う
-#   'rec_scores' : 各テキストの信頼度スコア
+#   'rec_texts'  : 認識テキストのリスト
+#   'rec_scores' : 各テキストの信頼度スコア   ← 今回追加で取得
 #   'dt_polys'   : 検出した文字領域の座標
 #   'textline_orientation_angles' : 各行の角度
-#
-# → results[0].get('rec_texts', []) でテキストリストを取り出す
 ```
 
 **なぜPaddleOCRの画像をBGRに変換するか：**  
@@ -509,21 +609,163 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
     all_text = []
     for i, (img, stem) in enumerate(images_with_stems):
         print(f"  ページ {i + 1} をOCR中...")
-        texts = run_ocr(reader, img)          # エンジンの差異は run_ocr() が吸収する
+        texts, debug_pairs = run_ocr(reader, img)
         page_text = "\n".join(texts)
         all_text.append(page_text)
         if SAVE_DEBUG:
-            with open(os.path.join(session_dir, f"{stem}.txt"), "w", encoding="utf-8") as f:
+            txt_path = os.path.join(session_dir, f"{stem}.txt")
+            with open(txt_path, "w", encoding="utf-8") as f:
                 f.write(page_text)
+            print(f"  テキストを保存: {txt_path}")
+            if debug_pairs:
+                scores_path = os.path.join(session_dir, f"{stem}_scores.txt")
+                with open(scores_path, "w", encoding="utf-8") as f:
+                    note = "（行マージ前の生検出データ）" if POSTPROCESS_MERGE_LINES and OCR_ENGINE == "paddleocr" else ""
+                    f.write(f"検出領域ごとの信頼度{note}:\n")
+                    for j, (text, score) in enumerate(debug_pairs, 1):
+                        f.write(f"  {j:3d}: {score:.3f} - {text}\n")
+                    avg = sum(s for _, s in debug_pairs) / len(debug_pairs)
+                    f.write(f"\n平均信頼度: {avg:.3f}\n")
+                print(f"  信頼度を保存: {scores_path}")
     return "\n\n".join(all_text)
 ```
 
 - OCR処理を `run_ocr(reader, img)` に委譲しているため、エンジンを追加・変更してもこの関数は変更不要
-- `SAVE_DEBUG=True` のとき、ページごとのテキストを `{stem}.txt` として保存する。画像と同じステムを使うため対応が一目で分かる
+- `SAVE_DEBUG=True` のとき、テキスト（`.txt`）・信頼度（`_scores.txt`）・画像（`.png`）を同じフォルダに保存する
+- 信頼度ファイルは `debug_pairs` が `None` のエンジン（manga-ocr）では保存しない
 
-### `run_ocr(reader, img)` — エンジン差異の吸収
+---
 
-EasyOCR と PaddleOCR はメソッド名と戻り値の構造が異なる。`run_ocr()` がその差異を内部に閉じ込め、テキスト文字列のリストだけを返す。詳細は `run_ocr()` のセクション参照。
+### `texts, debug_pairs = run_ocr(reader, img)` — タプルのアンパック
+
+```python
+texts, debug_pairs = run_ocr(reader, img)
+```
+
+`run_ocr()` が `(texts, debug_pairs)` のタプルを返すので、それを2つの変数に同時に代入している。Pythonではこれを **アンパック（分解）** と呼ぶ。
+
+```python
+# タプルのアンパック
+a, b = (1, 2)   # a = 1、b = 2
+
+# 戻り値がタプルの場合も同じ
+texts, debug_pairs = run_ocr(...)
+# run_ocr() が return texts, debug_pairs と書いて返したものを
+# 呼び出し側で texts と debug_pairs に分けて受け取れる
+```
+
+アンパックせずに受け取ることも可能（その場合は `result = run_ocr(...)` として `result[0]`・`result[1]` で参照する）。
+
+---
+
+### `enumerate(debug_pairs, 1)` — 開始番号を指定したインデックス付き列挙
+
+```python
+for j, (text, score) in enumerate(debug_pairs, 1):
+```
+
+通常の `enumerate(list)` は `(0, 要素)` から始まるが、`enumerate(list, 1)` と第2引数を指定すると `(1, 要素)` から始まる。
+
+```python
+pairs = [("A", 0.9), ("B", 0.8)]
+
+# 通常（0始まり）
+for j, item in enumerate(pairs):
+    print(j, item)  # 0 ("A", 0.9)、1 ("B", 0.8)
+
+# start=1 を指定（1始まり）
+for j, item in enumerate(pairs, 1):
+    print(j, item)  # 1 ("A", 0.9)、2 ("B", 0.8)
+```
+
+ファイルに書くとき「1番目から始まる番号」の方が人間には自然なので `1` を指定している。
+
+---
+
+### `for j, (text, score) in enumerate(debug_pairs, 1)` — ネストしたアンパック
+
+`debug_pairs` の各要素は `(テキスト, 信頼度)` のタプル。`enumerate()` を通すと `(番号, (テキスト, 信頼度))` になる。
+
+`for j, (text, score) in ...` と書くことで、`enumerate` の `(番号, タプル)` をさらに分解して `j`・`text`・`score` の3変数にまとめて受け取れる。
+
+```python
+debug_pairs = [("〇〇スーパー", 0.987), ("弁当", 0.923)]
+
+for j, (text, score) in enumerate(debug_pairs, 1):
+    # 1回目: j=1, text="〇〇スーパー", score=0.987
+    # 2回目: j=2, text="弁当",         score=0.923
+    print(j, text, score)
+```
+
+分解せずに書くと次のように長くなる（同じ意味）：
+
+```python
+for j, pair in enumerate(debug_pairs, 1):
+    text  = pair[0]
+    score = pair[1]
+```
+
+---
+
+### f文字列のフォーマット指定子
+
+```python
+f.write(f"  {j:3d}: {score:.3f} - {text}\n")
+```
+
+f文字列の `{}` の中に `:` を付けると、**表示形式を指定**できる。
+
+| 書き方 | 意味 | 例 |
+|---|---|---|
+| `{j:3d}` | 整数を幅3桁・右寄せで表示（足りない分は空白で埋める） | `1` → `"  1"`、`10` → `" 10"`、`100` → `"100"` |
+| `{score:.3f}` | 小数点3桁の浮動小数点で表示（4桁目を四捨五入） | `0.987654` → `"0.988"` |
+| `{text}` | 指定なし（そのまま文字列として展開） | `"〇〇スーパー"` → `"〇〇スーパー"` |
+
+`{j:3d}` の `d` は decimal（10進整数）の意味。`3` は最低幅（数字が1桁でも3文字分のスペースを確保する）。これにより出力が縦に揃う：
+
+```
+    1: 0.987 - 〇〇スーパー
+    2: 0.923 - 2025年05月
+   10: 0.911 - 弁当
+```
+
+`{score:.3f}` の `.3` は「小数点以下3桁」、`f` は float（浮動小数点数）の意味。
+
+---
+
+### `sum(s for _, s in debug_pairs)` — ジェネレータ式と `_`
+
+```python
+avg = sum(s for _, s in debug_pairs) / len(debug_pairs)
+```
+
+2つの書き方を組み合わせている。
+
+**① `_` で不要な変数を捨てる：**
+
+```python
+for _, s in debug_pairs:
+    # _ はテキスト（今回は使わない）、s はスコア
+```
+
+Pythonでは、使わない変数に `_` という名前を付けるのが慣習。`for (text, score) in ...` と書いて `text` を使わない場合、`for (_, score) in ...` と書けば「この変数は意図的に無視している」と伝わる。
+
+**② ジェネレータ式 `(式 for 変数 in リスト)`：**
+
+```python
+sum(s for _, s in debug_pairs)
+```
+
+リスト内包表記 `[s for _, s in debug_pairs]` は `[0.987, 0.923, ...]` のリストを作ってから `sum()` に渡す。ジェネレータ式 `(s for _, s in debug_pairs)` は要素を1つずつ `sum()` に渡すため、リスト全体を一度にメモリに載せない。今回の規模では差はないが、大量データのときにメモリ節約になる書き方。
+
+`sum(...)` の引数に直接渡す場合は外側の `()` を省略できる（Pythonの特別ルール）：
+
+```python
+sum(s for _, s in debug_pairs)    # OK（省略形）
+sum((s for _, s in debug_pairs))  # 同じ意味（省略前）
+```
+
+---
 
 ### `"\n".join(...)` と `"\n\n".join(...)`
 
@@ -568,12 +810,15 @@ numpy配列・RGB（shape: 高さ×幅×3）
     └─ [PREPROCESS_ERODE]     cv2.erode() で黒領域を拡張（文字を太くする）
     ├─→ [SAVE_DEBUG] cv2.imwrite() で前処理後画像（PNG）を保存
     ↓ run_ocr() でOCR（OCR_ENGINEの設定でエンジンを切り替え）
-    ├─ [easyocr]   reader.readtext() → [(座標, テキスト, 信頼度), ...]
-    └─ [paddleocr] reader.predict()  → [{'rec_texts': [...], 'rec_scores': [...], ...}]
-    ↓ run_ocr() 内でエンジンの差異を吸収
-テキスト文字列のリスト ["行1", "行2", ...]
-    ├─→ [SAVE_DEBUG] テキストを .txt ファイルに保存
-    ↓ 改行で結合
+    ├─ [easyocr]   reader.readtext()  → [(座標, テキスト, 信頼度), ...]
+    └─ [paddleocr] reader.predict()   → [{'rec_texts': [...], 'rec_scores': [...], 'dt_polys': [...], ...}]
+    ↓ run_ocr() 内でエンジンの差異を吸収し (texts, debug_pairs) のタプルで返す
+    ├─ texts      : テキスト文字列のリスト ["行1", "行2", ...]
+    └─ debug_pairs: 信頼度ペアのリスト [("行1", 0.987), ...]  ※manga-ocrはNone
+    ├─→ [SAVE_DEBUG] texts を .txt ファイルに保存
+    ├─→ [SAVE_DEBUG, debug_pairsがNoneでない] debug_pairs を _scores.txt に保存
+    │       内容: 検出領域ごとの「テキスト + 信頼度」+ 平均信頼度
+    ↓ textsを改行で結合
 str（抽出されたテキスト）
 ```
 

@@ -176,12 +176,17 @@ def init_reader():
 
 
 def run_ocr(reader, img):
-    """OCR_ENGINEの設定に応じて画像からテキスト文字列のリストを返す。
-    新しいエンジンを追加するときはここにelifブロックを1つ足す。"""
+    """OCR_ENGINEの設定に応じて画像からテキスト文字列のリストと信頼度情報を返す。
+    新しいエンジンを追加するときはここにelifブロックを1つ足す。
+    戻り値: (texts, debug_pairs) のタプル。
+    - texts      : 最終的なテキストリスト（PaddleOCRで行マージ有効な場合はマージ済み）
+    - debug_pairs: [(テキスト, 信頼度), ...] の生検出データ。信頼度を持たないエンジンはNone"""
     if OCR_ENGINE == "easyocr":
         # readtext()の戻り値は [(座標, テキスト, 信頼度), ...] のリスト
         results = reader.readtext(img)
-        return [r[1] for r in results]
+        texts = [r[1] for r in results]
+        debug_pairs = [(r[1], r[2]) for r in results]
+        return texts, debug_pairs
     elif OCR_ENGINE == "paddleocr":
         # PaddleOCRはBGR形式のnumpy配列を期待する。グレースケール（2次元）の場合はBGRに変換する
         ocr_img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR) if img.ndim == 2 else img
@@ -190,15 +195,18 @@ def run_ocr(reader, img):
         # （向き検出は初期化時の use_textline_orientation=True で制御するため cls 引数は不要）
         results = list(reader.predict(ocr_img))
         if not results:
-            return []
+            return [], None
         # predict()の戻り値は辞書のリスト。rec_texts キーにテキスト文字列のリストが入っている
         # その他のキー：rec_scores（信頼度）、dt_polys（検出座標）、rec_polys など
-        texts = results[0].get('rec_texts', [])
-        polys = results[0].get('dt_polys', [])
+        raw_texts = results[0].get('rec_texts', [])
+        scores    = results[0].get('rec_scores', [])
+        polys     = results[0].get('dt_polys', [])
+        # 行マージ前の生検出データを保持する（マージ後はテキストとスコアの対応が崩れるため）
+        debug_pairs = list(zip(raw_texts, scores)) if scores else None
         if POSTPROCESS_MERGE_LINES and polys:
             # 座標情報をもとに同じ行のテキストを連結する
-            return merge_lines_by_coord(texts, polys)
-        return texts
+            return merge_lines_by_coord(raw_texts, polys), debug_pairs
+        return raw_texts, debug_pairs
     elif OCR_ENGINE == "manga-ocr":
         from PIL import Image
         # manga-ocrはPIL Imageを期待する。numpy配列（RGB）から変換する
@@ -209,8 +217,8 @@ def run_ocr(reader, img):
         # reader(image)で画像全体を1つの文字列として返す（テキスト検出は行わない）
         # 戻り値は文字列1つ。run_ocr()の戻り値はリストなのでリストに包む
         result = reader(pil_img)
-        return [result]
-    return []
+        return [result], None
+    return [], None
 
 
 def pdf_to_images(pdf_path, session_dir):
@@ -279,8 +287,8 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
     for i, (img, stem) in enumerate(images_with_stems):
         print(f"  ページ {i + 1} をOCR中...")
 
-        # run_ocr()がエンジンの差異を吸収して、テキスト文字列のリストを返す
-        texts = run_ocr(reader, img)
+        # run_ocr()がエンジンの差異を吸収して、テキスト文字列のリストと信頼度ペアを返す
+        texts, debug_pairs = run_ocr(reader, img)
         page_text = "\n".join(texts)
         all_text.append(page_text)
 
@@ -290,6 +298,19 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
             with open(txt_path, "w", encoding="utf-8") as f:
                 f.write(page_text)
             print(f"  テキストを保存: {txt_path}")
+
+            # 信頼度ファイルを保存する（エンジンが信頼度を返す場合のみ）
+            if debug_pairs:
+                scores_path = os.path.join(session_dir, f"{stem}_scores.txt")
+                with open(scores_path, "w", encoding="utf-8") as f:
+                    # PaddleOCRで行マージ有効のとき、スコアはマージ前の生検出データ
+                    note = "（行マージ前の生検出データ）" if POSTPROCESS_MERGE_LINES and OCR_ENGINE == "paddleocr" else ""
+                    f.write(f"検出領域ごとの信頼度{note}:\n")
+                    for j, (text, score) in enumerate(debug_pairs, 1):
+                        f.write(f"  {j:3d}: {score:.3f} - {text}\n")
+                    avg = sum(s for _, s in debug_pairs) / len(debug_pairs)
+                    f.write(f"\n平均信頼度: {avg:.3f}\n")
+                print(f"  信頼度を保存: {scores_path}")
 
     return "\n\n".join(all_text)
 
