@@ -1,6 +1,6 @@
 import os
 import sys
-import json
+import tomllib
 import re
 import datetime
 
@@ -17,7 +17,7 @@ DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
 # 設定ファイルのパス（勘定科目・要チェック店舗リストを管理する）
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+CONFIG_PATH = os.path.join(BASE_DIR, "config.toml")
 
 
 # ------------------------------------------------------------------ #
@@ -25,15 +25,21 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 # ------------------------------------------------------------------ #
 
 def load_config():
-    """config.json から勘定科目と要チェック店舗リストを読み込んで返す。
+    """config.toml から設定を読み込んで返す。
     ファイルが存在しない場合はデフォルト値を返す。"""
     default = {
         "debit_account": "消耗品費",
         "credit_account": "事業主借",
         "check_stores": [],
-        "item_keywords": ["生活白玉", "はちみつ", "生クリーム", "クーベル", "ココア", "三温糖", "うき粉", "バター", "アルミ", "レーヌ", "両面テープ", "ラッピング", "包装紙"]   # 優先採用したい品目名の部分一致キーワード
+        "item_keywords": [],
+        "item_max": 2,
+        "item_exclude_words": ["割引", "%", "％", "レジ袋", "買物袋", "買い物袋", "有料レ"]
     }
-    return default
+    if not os.path.exists(CONFIG_PATH):
+        return default
+    # tomllib はバイナリモード（"rb"）でファイルを開く必要がある
+    with open(CONFIG_PATH, "rb") as f:
+        return tomllib.load(f)
 
 
 # ------------------------------------------------------------------ #
@@ -130,11 +136,11 @@ def _parse_amount(line):
     """1行から金額を取り出して整数で返す。見つからなければ None。
 
     優先順：
-      1. ¥/￥/\ の直後の数字（最も確実）
+      1. ¥ または ￥ または \ のいずれかの直後の数字（最も確実）
       2. ¥ なし：行内の数字列を先頭から順に試し、10 以上の最初のものを返す
          （品目数などの 1〜2 桁を除外するため）
     """
-    # ¥ ￥ \ の直後の数字を優先
+    # ¥ または ￥ または \ の直後の数字を優先
     m = re.search(r'[¥￥\\]\s*([\dO,，]+)', line)
     if m:
         val = _to_int(m.group(1))
@@ -170,12 +176,6 @@ def extract_amount(text):
                     return amount
     return None
 
-
-# 品目として採用する最大件数（定数）
-_ITEM_MAX = 2
-
-# 品目行から除外するキーワード（割引・袋代など経費計上不要なもの）
-_ITEM_EXCLUDE_WORDS = ["割引", "%", "％", "レジ袋", "買物袋", "買い物袋", "有料レ"]
 
 # 行末の品目価格パターン：
 #   [半角/全角スペース1つ以上] [¥￥任意] [数字とカンマ] [外軽任意]
@@ -219,7 +219,9 @@ def extract_items(text, config):
              _ITEM_MAX 件になるまで非マッチ品目で補う。
     抽出できなかった場合は空リストを返す。
     """
-    keywords = config.get("item_keywords", [])
+    keywords      = config.get("item_keywords", [])
+    item_max      = config.get("item_max", 2)
+    exclude_words = config.get("item_exclude_words", [])
 
     # --- Phase 1：候補リストを作る ---
     candidates = []
@@ -229,7 +231,7 @@ def extract_items(text, config):
             break
 
         # 割引・袋代など除外ワードを含む行はスキップ
-        if any(w in line for w in _ITEM_EXCLUDE_WORDS):
+        if any(w in line for w in exclude_words):
             continue
 
         m = _ITEM_PRICE_RE.match(line)
@@ -252,14 +254,14 @@ def extract_items(text, config):
     for item in candidates:
         if any(kw in item for kw in keywords):
             selected.append(item)
-            if len(selected) >= _ITEM_MAX:
+            if len(selected) >= item_max:
                 return selected   # キーワードマッチが揃った時点で確定
         else:
             non_kw.append(item)
 
-    # キーワードマッチが _ITEM_MAX 未満の場合は非マッチ品目で補う
+    # キーワードマッチが item_max 未満の場合は非マッチ品目で補う
     for item in non_kw:
-        if len(selected) >= _ITEM_MAX:
+        if len(selected) >= item_max:
             break
         selected.append(item)
 
