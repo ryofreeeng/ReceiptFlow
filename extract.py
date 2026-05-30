@@ -136,7 +136,7 @@ def _parse_amount(line):
     """1行から金額を取り出して整数で返す。見つからなければ None。
 
     優先順：
-      1. ¥ または ￥ または \ のいずれかの直後の数字（最も確実）
+      1. ¥ または ￥ またはバックスラッシュのいずれかの直後の数字（最も確実）
       2. ¥ なし：行内の数字列を先頭から順に試し、10 以上の最初のものを返す
          （品目数などの 1〜2 桁を除外するため）
     """
@@ -269,16 +269,22 @@ def extract_items(text, config):
 
 
 def extract_store_name(text):
-    """OCRテキストから店舗名を抽出して返す。
-    レシートの先頭付近にある店名を候補とする。
-    抽出できなかった場合は None を返す。"""
-    return None
+    """OCRテキストの先頭から空行を除いた最初の2行を返す。
+    店舗名はレシートの冒頭に記載されることが多いため先頭2行を対象とする。
+    テキストが空の場合は None を返す。"""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    return "\n".join(lines[:2])
 
 
 def needs_review(store_name, check_stores):
-    """店舗名が要チェックリストに含まれるかを判定して返す。
+    """店舗名（先頭2行）に要チェックリストの店舗名が含まれるかを判定して返す。
+    check_stores の各文字列が store_name に部分一致するかで判定する。
     store_name が None の場合は False を返す。"""
-    return False
+    if store_name is None:
+        return False
+    return any(store in store_name for store in check_stores)
 
 
 def build_record(filename, text, config):
