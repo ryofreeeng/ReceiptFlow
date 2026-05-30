@@ -3,6 +3,7 @@ import sys
 import tomllib
 import re
 import datetime
+import openpyxl
 
 # スクリプト・exe どちらの実行方法でも正しいプロジェクトルートを取得する
 if getattr(sys, 'frozen', False):
@@ -33,7 +34,8 @@ def load_config():
         "check_stores": [],
         "item_keywords": [],
         "item_max": 2,
-        "item_exclude_words": ["割引", "%", "％", "レジ袋", "買物袋", "買い物袋", "有料レ"]
+        "item_exclude_words": ["割引", "%", "％", "レジ袋", "買物袋", "買い物袋", "有料レ"],
+        "sort_mode": "new_only"
     }
     if not os.path.exists(CONFIG_PATH):
         return default
@@ -322,10 +324,103 @@ def build_record(filename, text, config):
 # Excel 出力
 # ------------------------------------------------------------------ #
 
-def write_to_excel(records, output_path):
+# 出力する Excel の設定
+_BOOK_NAME_PREFIX = "対面領収証の帳簿"   # ファイル名の先頭部分（既存ファイルの検索にも使う）
+_SHEET_NAME       = "帳簿"
+_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック"]
+
+
+def _find_latest_book(output_dir):
+    """output_dir 内から _BOOK_NAME_PREFIX を含む最新の xlsx ファイルのパスを返す。
+    複数ある場合はファイル名のアルファベット順（＝タイムスタンプ順）で最新のものを返す。
+    見つからない場合は None を返す。"""
+    if not os.path.exists(output_dir):
+        return None
+    candidates = [
+        f for f in os.listdir(output_dir)
+        if f.endswith(".xlsx") and _BOOK_NAME_PREFIX in f
+    ]
+    if not candidates:
+        return None
+    # ファイル名に yyyymmdd-HHmmss が含まれるため、文字列昇順の末尾が最新
+    return os.path.join(output_dir, sorted(candidates)[-1])
+
+
+def _to_row(record):
+    """record 辞書を Excel の1行分のリストに変換する。"""
+    return [
+        record["date"] or "",
+        record["summary"],
+        record["debit_account"],
+        record["debit_amount"] or "",
+        record["credit_account"],
+        record["credit_amount"] or "",
+        "要確認" if record["needs_review"] else "",
+    ]
+
+
+def _sort_key(row):
+    """行リストの日付（0列目）をソートキーとして返す。日付なしは末尾に送る。"""
+    return row[0] or "9999-99-99"
+
+
+def write_to_excel(records, output_dir, config):
     """抽出情報のリストを Excel ファイルに書き出す。
-    列構成：日付 / 摘要 / 借方科目 / 借方金額 / 貸方科目 / 貸方金額 / 要チェック"""
-    pass
+
+    既存ファイルの扱い：
+      - "対面領収証の帳簿" を含む xlsx が output_dir にある → 最新のものを開く
+        - シート "帳簿" あり → そのシートに追記または全件並び替え
+        - シート "帳簿" なし → シートを新規作成してヘッダー＋データを書く
+      - 該当ファイルがない → 新規ファイル（タイムスタンプ付き名）を作成する
+
+    config["sort_mode"] の値によって並び替え方が変わる：
+      "new_only" → 今回書くレコードだけを日付順にして追記する
+      "all"      → 既存行と今回分を合わせて全件を日付順に並び替えて書き直す
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    sort_mode = config.get("sort_mode", "new_only")
+
+    existing_path = _find_latest_book(output_dir)
+
+    if existing_path:
+        wb = openpyxl.load_workbook(existing_path)
+        if _SHEET_NAME in wb.sheetnames:
+            ws = wb[_SHEET_NAME]
+            needs_header = False
+        else:
+            ws = wb.create_sheet(_SHEET_NAME)
+            needs_header = True
+        output_path = existing_path
+    else:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = _SHEET_NAME
+        needs_header = True
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"{_BOOK_NAME_PREFIX}_{timestamp}記帳.xlsx"
+        output_path = os.path.join(output_dir, filename)
+
+    if needs_header:
+        ws.append(_HEADERS)
+
+    new_rows = sorted([_to_row(r) for r in records], key=_sort_key)
+
+    if sort_mode == "all" and not needs_header:
+        # 既存データ行を読み込んで今回分と合わせ全件を日付順に並び替える
+        existing_rows = [list(row) for row in ws.iter_rows(min_row=2, values_only=True)]
+        all_rows = sorted(existing_rows + new_rows, key=_sort_key)
+        # データ行をすべて削除してから書き直す（ヘッダー行は残す）
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row - 1)
+        for row in all_rows:
+            ws.append(row)
+    else:
+        # 今回分のみソートして末尾に追記する（new_only モード、または新規シート）
+        for row in new_rows:
+            ws.append(row)
+
+    wb.save(output_path)
+    print(f"出力完了: {output_path}")
 
 
 # ------------------------------------------------------------------ #
@@ -416,10 +511,7 @@ def main():
         print()
 
     # Excel に書き出す
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_path = os.path.join(OUTPUT_DIR, "expenses.xlsx")
-    write_to_excel(records, output_path)
-    print(f"出力完了（予定）: {output_path}")
+    write_to_excel(records, OUTPUT_DIR, config)
 
 
 if __name__ == "__main__":

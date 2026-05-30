@@ -37,7 +37,7 @@ OCRエンジン（`easyocr`・`paddleocr`）のimportはトップレベルでは
 UNPROCESSED_DIR = os.path.join(BASE_DIR, "receipts", "unprocessed")
 ```
 
-OCR対象のPDFが置かれているフォルダのパス。`BASE_DIR` を起点にすることでどこから実行しても正しいパスになる（`BASE_DIR` の詳細は `test_drive_connection_guide.md` 参照）。
+OCR対象のPDFが置かれているフォルダのパス。`BASE_DIR` を起点にすることでどこから実行しても正しいパスになる（`BASE_DIR` の詳細は `drive_connection_guide.md` 参照）。
 
 ---
 

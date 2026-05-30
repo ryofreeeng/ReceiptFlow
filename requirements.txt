@@ -36,3 +36,6 @@ numpy
 
 # 画像の前処理（グレースケール変換・2値化・コントラスト強調・ノイズ除去）に使うライブラリ（import名: cv2）
 opencv-python
+
+# Excelファイルの読み書きに使うライブラリ（import名: openpyxl）
+openpyxl

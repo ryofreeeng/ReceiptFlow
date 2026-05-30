@@ -7,18 +7,20 @@
 ```python
 import os
 import sys
-import json
+import tomllib
 import re
 import datetime
+import openpyxl
 ```
 
 | インポート | 所属パッケージ | 役割 |
 |---|---|---|
 | `os` | Python標準 | ファイルパス操作・フォルダ内ファイル一覧の取得 |
 | `sys` | Python標準 | `sys.frozen`・`sys.executable` で実行環境（スクリプト or exe）を判定する |
-| `json` | Python標準 | `config.json` を読み込んで Python の辞書に変換する |
+| `tomllib` | Python標準（3.11+） | `config.toml` を読み込んで Python の辞書に変換する |
 | `re` | Python標準 | 正規表現によるパターンマッチ。`re.search()` で文字列の中から日付を探す |
 | `datetime` | Python標準 | 日付を表す `datetime.date` 型を作る。`datetime.date(2025, 5, 26)` のように使う |
+| `openpyxl` | サードパーティ | Excel ファイルの読み書き。`pip install openpyxl` が必要 |
 
 ### Python機能の種別早見表
 
@@ -27,8 +29,8 @@ import datetime
 | 種別 | 意味 | `pip install` | 例 |
 |---|---|---|---|
 | **組み込み（built-in）** | `import` なしでいつでも使える | 不要 | `int()`, `str()`, `len()`, `any()`, `all()`, `enumerate()`, `sorted()`, `print()`, `input()` / 文字列メソッド `.split()`, `.replace()`, `.strip()`, `.isdigit()` など |
-| **標準ライブラリ** | `import` は必要だが Python 付属 | 不要 | `re`（正規表現）, `os`（ファイル操作）, `sys`（実行環境）, `json`（JSON読み書き）, `datetime`（日付） |
-| **サードパーティ** | 別途インストールが必要 | **必要** | `openpyxl`（Excel読み書き・未実装） |
+| **標準ライブラリ** | `import` は必要だが Python 付属 | 不要 | `re`（正規表現）, `os`（ファイル操作）, `sys`（実行環境）, `tomllib`（TOML読み込み）, `datetime`（日付） |
+| **サードパーティ** | 別途インストールが必要 | **必要** | `openpyxl`（Excel読み書き） |
 
 → このファイルで登場する `re.search()`・`os.path.join()`・`datetime.date()` はすべて「標準ライブラリ」。  
 → `int()`・`str()`・`any()`・文字列メソッドはすべて「組み込み」。
@@ -45,7 +47,7 @@ else:
 
 DEBUG_DIR  = os.path.join(BASE_DIR, "receipts", "debug")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+CONFIG_PATH = os.path.join(BASE_DIR, "config.toml")
 ```
 
 ### `sys.frozen` とは
@@ -53,16 +55,16 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 `getattr(sys, 'frozen', False)` は「`sys` という変数の `frozen` という属性を読む。なければ `False` を返す」という意味。  
 PyInstaller などで exe に固めた場合、`sys.frozen` が `True` になる。  
 → exe 実行時は `sys.executable`（exe ファイルのパス）を、スクリプト実行時は `__file__`（`.py` ファイルのパス）を使って、どちらでも正しいプロジェクトルートを取得する。  
-詳細は `test_drive_connection_guide.md` の `BASE_DIR` の項を参照。
+詳細は `drive_connection_guide.md` の `BASE_DIR` の項を参照。
 
 ### `DEBUG_DIR`
 
-`ocr.py` がデバッグ出力を保存するフォルダ（`receipts/debug/`）。  
-`extract.py` はここにあるセッションフォルダを読み込む。
+`ocr.py` がデバッグ画像などを保存するフォルダ（`receipts/debug/`）。  
+`extract.py` はここにあるセッションフォルダのテキストファイルを読み込む。
 
 ### `CONFIG_PATH`
 
-勘定科目・要チェック店舗リストを管理する設定ファイルのパス。
+`config.toml`（TOML形式の設定ファイル）のパス。勘定科目・要チェック店舗・品目キーワードなどを管理する。
 
 ---
 
@@ -73,18 +75,32 @@ def load_config():
     default = {
         "debit_account": "消耗品費",
         "credit_account": "事業主借",
-        "check_stores": []
+        "check_stores": [],
+        "item_keywords": [],
+        "item_max": 2,
+        "item_exclude_words": ["割引", "%", "％", "レジ袋", "買物袋", "買い物袋", "有料レ"],
+        "sort_mode": "new_only"
     }
-    return default
+    if not os.path.exists(CONFIG_PATH):
+        return default
+    with open(CONFIG_PATH, "rb") as f:
+        return tomllib.load(f)
 ```
 
-**現状**：常にデフォルト値を返すだけのスタブ（仮実装）。  
-**今後の実装予定**：`CONFIG_PATH` の `config.json` を `json.load()` で読み込み、存在しない場合はデフォルト値を返す。
+**役割**：`config.toml` を読み込んで設定の辞書を返す。ファイルが存在しない場合はデフォルト値を返す。
+
+**`tomllib.load(f)` とは**（標準ライブラリ `tomllib`）：TOML形式のファイルを読み込んで Python の辞書に変換する。  
+`"rb"` （バイナリモード）でファイルを開く必要がある（`tomllib` が文字コードを自分で処理するため）。
 
 ### 戻り値の型
 
 Python の辞書（C# でいう `Dictionary<string, object>`）。  
 呼び出し元では `config["debit_account"]` のようにキー名で値を取り出す。
+
+### デフォルト値の役割
+
+`config.toml` が存在しない環境でもスクリプトが動作するための安全策。  
+実際の運用では `config.toml` の値が使われる。
 
 ---
 
@@ -528,31 +544,38 @@ selected が _ITEM_MAX 未満なら non_kw の先頭から補充
 辞書の `get(キー, デフォルト値)` は、キーが存在しない場合にデフォルト値を返す。  
 `config["item_keywords"]` と違い、キーがなくても `KeyError` を起こさない。
 
-## 情報抽出関数（スタブ）
-
-### `extract_store_name(text)`
+## `extract_store_name(text)`（実装済み）
 
 ```python
 def extract_store_name(text):
-    return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return None
+    return "\n".join(lines[:2])
 ```
 
-**役割**：OCRテキストから店舗名を返す。  
-**今後の実装予定**：レシートの先頭数行（通常1〜3行目）に店舗名が来ることが多いため、その範囲を候補とする。
+**役割**：OCRテキストの先頭から空行を除いた最初の2行を1つの文字列として返す。  
+レシートの店舗名は冒頭に記載されることが多いため先頭2行を対象とする。テキストが空の場合は `None` を返す。
+
+**`"\n".join(lines[:2])` とは**：リストの要素を改行で連結して1つの文字列にする。  
+例：`["ダイエー西宮店", "2025年5月26日"]` → `"ダイエー西宮店\n2025年5月26日"`  
+→ 詳細は [[Pythonのin演算子とjoin（文字列とリストの違い）]]
 
 ---
 
-## `needs_review(store_name, check_stores)`
+## `needs_review(store_name, check_stores)`（実装済み）
 
 ```python
 def needs_review(store_name, check_stores):
-    return False
+    if store_name is None:
+        return False
+    return any(store in store_name for store in check_stores)
 ```
 
-**役割**：店舗名が要チェックリストに含まれるかを `True`/`False` で返す。  
-`store_name` が `None` の場合は `False` を返す（`None` をリストと比較するとエラーになるため）。
+**役割**：先頭2行テキスト（`store_name`）の中に `check_stores` の店舗名が部分一致するかを判定して `True`/`False` で返す。  
+`store_name` が `None` の場合は `False` を返す。
 
-**今後の実装予定**：`store_name in check_stores` または部分一致で判定する。
+**設計の意図**：`extract_store_name()` が先頭2行を丸ごと返し、`needs_review()` がその中を検索する役割分担になっている。2行まとめて検索するため、店舗名が1行目でも2行目でも検出できる。
 
 ---
 
@@ -609,30 +632,112 @@ C# でいう `store ?? "（品目不明）"` と同じ。
 | `filename` | 元のテキストファイル名（どのレシートかの追跡用） |
 | `date` | 抽出した日付（`None` の場合はセルが空欄になる） |
 | `summary` | 摘要（品目名の結合 or 店舗名 or 「品目不明」） |
-| `debit_account` | 借方科目（`config.json` の値） |
+| `debit_account` | 借方科目（`config.toml` の値） |
 | `debit_amount` | 借方金額（合計金額） |
-| `credit_account` | 貸方科目（`config.json` の値） |
+| `credit_account` | 貸方科目（`config.toml` の値） |
 | `credit_amount` | 貸方金額（合計金額と同じ値） |
 | `needs_review` | 要チェックフラグ（`True`/`False`） |
 
 ---
 
-## `write_to_excel(records, output_path)`
+## Excel 出力の実装
+
+### 定数
 
 ```python
-def write_to_excel(records, output_path):
-    pass
+_BOOK_NAME_PREFIX = "対面領収証の帳簿"
+_SHEET_NAME       = "帳簿"
+_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック"]
 ```
 
-**現状**：`pass`（何もしない）のスタブ。  
-`pass` は「中身のない関数・ブロック」をエラーにせず定義するためのキーワード。C# の `{}` に相当。
-
-**今後の実装予定**：`openpyxl` ライブラリで Excel ファイルを作成する。  
-列順：日付 / 摘要 / 借方科目 / 借方金額 / 貸方科目 / 貸方金額 / 要チェック
+- `_BOOK_NAME_PREFIX`：既存ファイルを検索するときのキーワードにもなる
+- `_SHEET_NAME`：固定のシート名
+- `_HEADERS`：1行目に書くヘッダー行
 
 ---
 
-## `select_debug_session()`
+### `_find_latest_book(output_dir)`
+
+```python
+def _find_latest_book(output_dir):
+    if not os.path.exists(output_dir):
+        return None
+    candidates = [
+        f for f in os.listdir(output_dir)
+        if f.endswith(".xlsx") and _BOOK_NAME_PREFIX in f
+    ]
+    if not candidates:
+        return None
+    return os.path.join(output_dir, sorted(candidates)[-1])
+```
+
+**役割**：`output_dir` の中から `"対面領収証の帳簿"` を含む最新の xlsx ファイルのパスを返す。  
+ファイル名に `yyyymmdd-HHmmss` が含まれるため、アルファベット順の末尾が最新になる。
+
+---
+
+### `_to_row(record)` と `_sort_key(row)`
+
+```python
+def _to_row(record):
+    return [
+        record["date"] or "",
+        record["summary"],
+        record["debit_account"],
+        record["debit_amount"] or "",
+        record["credit_account"],
+        record["credit_amount"] or "",
+        "要確認" if record["needs_review"] else "",
+    ]
+
+def _sort_key(row):
+    return row[0] or "9999-99-99"
+```
+
+- `_to_row()`：record 辞書を Excel の1行分のリストに変換する。`needs_review` が `True` なら `"要確認"`、`False` なら空文字
+- `_sort_key()`：行リストの0列目（日付）をソートキーとして返す。日付が空のレコードは末尾に送る
+
+---
+
+### `write_to_excel(records, output_dir, config)`（実装済み）
+
+**役割**：抽出情報のリストを Excel ファイルに書き出す。
+
+**ファイルの扱い（3パターン）**：
+
+| 状況 | 動作 |
+|---|---|
+| `output_dir` に該当ファイルなし | タイムスタンプ付き新規ファイルを作成 |
+| ファイルあり・シート「帳簿」あり | 既存シートに追記（または全件並び替え） |
+| ファイルあり・シート「帳簿」なし | 新しいシートを作成してヘッダー＋データを書く |
+
+**ファイル名の形式**：`対面領収証の帳簿_yyyymmdd-HHmmss記帳.xlsx`
+
+**`config["sort_mode"]` による並び替えの切り替え**：
+
+| 値 | 動作 |
+|---|---|
+| `"new_only"` | 今回書くレコードだけを日付順にして末尾に追記する |
+| `"all"` | 既存行と今回分を合わせて全件を日付順に並び替えて書き直す |
+
+**`openpyxl` の主な使い方**（サードパーティ）：
+
+```python
+wb = openpyxl.load_workbook(path)   # 既存ファイルを開く
+wb = openpyxl.Workbook()            # 新規ワークブックを作る
+ws = wb.active                      # アクティブシートを取得
+ws = wb["帳簿"]                     # シート名で取得
+ws = wb.create_sheet("帳簿")        # 新規シートを追加
+wb.sheetnames                       # シート名の一覧リスト
+ws.append(row)                      # 1行分のリストを末尾に追加
+ws.iter_rows(min_row=2, values_only=True)  # 2行目以降を値として取得
+ws.delete_rows(2, ws.max_row - 1)   # ヘッダー以外の行を削除
+wb.save(path)                       # ファイルを保存
+```
+
+---
+
+## `select_debug_session()`（OCR中間ファイルのセッション選択）
 
 ```python
 def select_debug_session():
@@ -756,7 +861,7 @@ def main():
         print()
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_path = os.path.join(OUTPUT_DIR, "expenses.xlsx")
+    write_to_excel(records, OUTPUT_DIR, config)
     write_to_excel(records, output_path)
     print(f"出力完了（予定）: {output_path}")
 ```
@@ -790,4 +895,4 @@ if __name__ == "__main__":
 
 このファイルを直接 `python extract.py` で実行したときだけ `main()` が呼ばれる。  
 別のファイルから `import extract` した場合は `main()` は自動では実行されない。  
-`ocr.py` でも同じパターンが使われている（`test_drive_connection_guide.md` 参照）。
+`ocr.py` でも同じパターンが使われている（`drive_connection_guide.md` 参照）。
