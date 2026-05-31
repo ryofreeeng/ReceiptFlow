@@ -5,6 +5,7 @@ import shutil
 import traceback
 import tomllib
 import re
+import fitz
 
 # スクリプト・exe どちらの実行方法でも正しいプロジェクトルートを取得する
 if getattr(sys, 'frozen', False):
@@ -16,6 +17,7 @@ else:
 UNPROCESSED_DIR  = os.path.join(BASE_DIR, "receipts", "unprocessed")
 PROCESSED_DIR    = os.path.join(BASE_DIR, "receipts", "processed")
 INTERMEDIATE_DIR = os.path.join(BASE_DIR, "receipts", "intermediate")
+RENAMED_DIR      = os.path.join(BASE_DIR, "receipts", "renamed")
 OUTPUT_DIR       = os.path.join(BASE_DIR, "output")
 LOG_DIR          = os.path.join(BASE_DIR, "logs")
 CONFIG_PATH      = os.path.join(BASE_DIR, "config.toml")
@@ -54,6 +56,7 @@ def setup_session():
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(PROCESSED_DIR, exist_ok=True)
     os.makedirs(INTERMEDIATE_DIR, exist_ok=True)
+    os.makedirs(RENAMED_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     return session_id, log_dir
 
@@ -234,7 +237,33 @@ def step_extract(session_id, log_dir, config):
         _log_error(log_dir, "step_extract", "Excel書き込み", e)
         return
 
-    # --- 層2b：ファイル移動（Excelが成功した場合のみ実行）---
+    # --- 層2b-1：日付リネームコピー（ファイル移動前に実行・UNPROCESSED_DIR から読む）---
+    # レコードごと＝ページごとに1件のPDFを生成してローカルと Drive に保存する
+    for record in records:
+        try:
+            stem = os.path.splitext(record["filename"])[0]
+            page_match = re.search(r'_page(\d+)', stem)
+            page_index = int(page_match.group(1)) - 1 if page_match else 0
+            copy_page_as_pdf(record["source_pdf"], page_index, record["date"], RENAMED_DIR)
+        except Exception as e:
+            _log_error(log_dir, "step_extract", f"PDFリネーム: {record['filename']}", e)
+            continue  # ローカル保存が失敗したら Drive アップロードもスキップ
+
+        # ローカル保存が成功した場合のみ Drive にアップロードする
+        try:
+            # 保存されたファイル名を特定する（連番付きの場合もあるため RENAMED_DIR から最新を探す）
+            base_name = f"{record['date']}_対面領収書" if record["date"] else "日付不明_対面領収書"
+            renamed_files = sorted([
+                f for f in os.listdir(RENAMED_DIR)
+                if f.startswith(base_name) and f.endswith(".pdf")
+            ])
+            if renamed_files:
+                latest = os.path.join(RENAMED_DIR, renamed_files[-1])
+                upload_renamed_to_drive(latest)
+        except Exception as e:
+            _log_error(log_dir, "step_extract", f"Drive アップロード: {record['filename']}", e)
+
+    # --- 層2b-2：ファイル移動（元PDFごとに1回）---
     for pdf_name in succeeded_pdf_names:
         # ローカル移動と Drive 移動はそれぞれ独立して try する
         # （一方が失敗しても他方を試みる）
@@ -253,6 +282,36 @@ def step_extract(session_id, log_dir, config):
 # ------------------------------------------------------------------ #
 # ファイル移動
 # ------------------------------------------------------------------ #
+
+def copy_page_as_pdf(pdf_name, page_index, date_str, renamed_dir):
+    """元PDFの指定ページを1枚の単独PDFとして renamed_dir に保存する。
+    同名ファイルが既にある場合は連番サフィックスを付ける。
+
+    pdf_name   : 元PDFのファイル名（UNPROCESSED_DIR 内に存在する）
+    page_index : 抽出するページ番号（0始まり）
+    date_str   : 領収書から読み取った日付文字列（"YYYY-MM-DD"、読取失敗時は None）
+    renamed_dir: 保存先フォルダパス
+    """
+    src_path = os.path.join(UNPROCESSED_DIR, pdf_name)
+    base_name = f"{date_str}_対面領収書" if date_str else "日付不明_対面領収書"
+    dst_path = os.path.join(renamed_dir, f"{base_name}.pdf")
+
+    # 同名ファイルが既にある場合は _2, _3 ... と連番にする
+    if os.path.exists(dst_path):
+        n = 2
+        while os.path.exists(os.path.join(renamed_dir, f"{base_name}_{n}.pdf")):
+            n += 1
+        dst_path = os.path.join(renamed_dir, f"{base_name}_{n}.pdf")
+
+    # 元PDFを開き、指定ページだけの新しいPDFを作成して保存する
+    src_doc = fitz.open(src_path)
+    dst_doc = fitz.open()
+    dst_doc.insert_pdf(src_doc, from_page=page_index, to_page=page_index)
+    dst_doc.save(dst_path)
+    dst_doc.close()
+    src_doc.close()
+    print(f"  [保存] renamed: {os.path.basename(dst_path)}")
+
 
 def move_local_to_processed(pdf_name):
     """処理済み PDF をローカルの unprocessed から processed に移動する。
@@ -277,6 +336,14 @@ def move_drive_to_processed(pdf_name, log_dir):
     from drive_connection import get_drive_service, move_to_processed_on_drive
     service = get_drive_service()
     move_to_processed_on_drive(service, pdf_name)
+
+
+def upload_renamed_to_drive(local_pdf_path):
+    """日付リネーム済み PDF を Drive の renamed フォルダにアップロードする。"""
+    from drive_connection import get_drive_service, upload_file, RENAMED_FOLDER_ID
+    service = get_drive_service()
+    file_name = os.path.basename(local_pdf_path)
+    upload_file(service, local_pdf_path, RENAMED_FOLDER_ID, file_name)
 
 
 # ------------------------------------------------------------------ #

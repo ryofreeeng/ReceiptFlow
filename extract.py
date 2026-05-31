@@ -333,7 +333,7 @@ def build_record(filename, text, config):
 # 出力する Excel の設定
 _BOOK_NAME_PREFIX = "対面領収証の帳簿"   # ファイル名の先頭部分（既存ファイルの検索にも使う）
 _SHEET_NAME       = "帳簿"
-_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック", "元PDFファイル名"]
+_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック", "元PDFファイル名", "書き込み日時"]
 
 
 def _find_latest_book(output_dir):
@@ -410,7 +410,9 @@ def write_to_excel(records, output_dir, config):
     if needs_header:
         ws.append(_HEADERS)
 
-    new_rows = sorted([_to_row(r) for r in records], key=_sort_key)
+    # 同じ実行で書き込まれた行はすべて同じ日時になる（バッチの境目の識別用）
+    write_datetime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_rows = sorted([_to_row(r) + [write_datetime] for r in records], key=_sort_key)
 
     if sort_mode == "all" and not needs_header:
         # 既存データ行を読み込んで今回分と合わせ全件を日付順に並び替える

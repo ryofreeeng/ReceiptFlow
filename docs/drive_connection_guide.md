@@ -109,11 +109,12 @@ TOKEN_FILE = "token.json"
 
 ---
 
-### UNPROCESSED_FOLDER_ID / PROCESSED_FOLDER_ID
+### UNPROCESSED_FOLDER_ID / PROCESSED_FOLDER_ID / RENAMED_FOLDER_ID
 
 ```python
 UNPROCESSED_FOLDER_ID = os.environ["UNPROCESSED_FOLDER_ID"]
 PROCESSED_FOLDER_ID   = os.environ["PROCESSED_FOLDER_ID"]
+RENAMED_FOLDER_ID     = os.environ["RENAMED_FOLDER_ID"]
 ```
 
 Drive内のフォルダID。`.env` から読み込む。フォルダIDはDriveでフォルダを開いたときのURLの末尾：
@@ -126,6 +127,7 @@ https://drive.google.com/drive/folders/★ここ★
 |---|---|---|
 | `UNPROCESSED_FOLDER_ID` | Drive の unprocessed フォルダ | PDF一覧取得・ダウンロード元 |
 | `PROCESSED_FOLDER_ID` | Drive の processed フォルダ | 処理済みPDFの移動先 |
+| `RENAMED_FOLDER_ID` | Drive の renamed フォルダ | 日付リネーム済みPDFのアップロード先 |
 
 `os.environ["キー名"]` はキーが存在しない場合に `KeyError` を発生させる。意図的にそうしている（値がなければ起動時に即エラーにして、後から気づくより早く問題を発見するため）。
 
@@ -509,6 +511,43 @@ with open(save_path, "wb") as out:
 OSに合わせたファイルパスを組み立てる関数。Mac/Linuxでは `/` で、Windowsでは `\` で区切られたパスを返す。
 
 `BASE_DIR` を先頭に渡すことで、スクリプト・exe・タスクスケジューラのどこから実行しても正しい保存先が組み立てられる。文字列結合でも書けるが `os.path.join` を使うと移植性が高まる。
+
+---
+
+## `upload_file(service, local_path, folder_id, file_name)` 関数
+
+ローカルファイルを指定した Drive フォルダにアップロードする。
+
+```python
+def upload_file(service, local_path, folder_id, file_name):
+    file_metadata = {
+        "name": file_name,
+        "parents": [folder_id],
+    }
+    media = MediaFileUpload(local_path, mimetype="application/pdf")
+    service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id"
+    ).execute()
+```
+
+| 引数 | 内容 |
+|---|---|
+| `service` | `get_drive_service()` が返すサービスオブジェクト |
+| `local_path` | アップロードするファイルのローカルパス（フルパス） |
+| `folder_id` | アップロード先の Drive フォルダID |
+| `file_name` | Drive 上でのファイル名 |
+
+**`MediaFileUpload` について：**  
+`MediaIoBaseDownload`（ダウンロード用）と対になるクラス。ローカルファイルをチャンク単位で Drive にアップロードする。`mimetype` で `"application/pdf"` を指定することで Drive がPDFとして認識する。
+
+**`files().create()` と `files().update()` の違い：**
+
+| メソッド | 用途 |
+|---|---|
+| `files().create()` | 新しいファイルを Drive に作成する（アップロード） |
+| `files().update()` | 既存ファイルのメタデータや内容を更新する（移動・上書き） |
 
 ---
 

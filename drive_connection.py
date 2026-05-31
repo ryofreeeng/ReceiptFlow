@@ -6,7 +6,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 # google-api-python-client パッケージ。Drive APIのサービスオブジェクトを生成する
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
+from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import io
 import os
 import sys
@@ -31,6 +31,8 @@ TOKEN_FILE = "token.json"
 UNPROCESSED_FOLDER_ID = os.environ["UNPROCESSED_FOLDER_ID"]
 # 処理済みファイルの移動先フォルダID（.envから読み込む）
 PROCESSED_FOLDER_ID = os.environ["PROCESSED_FOLDER_ID"]
+# 日付リネーム済みPDFのアップロード先フォルダID（.envから読み込む）
+RENAMED_FOLDER_ID = os.environ["RENAMED_FOLDER_ID"]
 
 
 def get_drive_service():
@@ -91,6 +93,27 @@ def download_file(service, file_info, local_dir):
     with open(save_path, "wb") as out:
         out.write(buffer.getvalue())
     print(f"  ダウンロード完了: {file_info['name']}")
+
+
+def upload_file(service, local_path, folder_id, file_name):
+    """ローカルファイルを指定した Drive フォルダにアップロードする。
+
+    local_path: アップロードするファイルのローカルパス
+    folder_id : アップロード先の Drive フォルダID
+    file_name : Drive 上でのファイル名
+    """
+    file_metadata = {
+        "name": file_name,
+        "parents": [folder_id],
+    }
+    # MediaFileUpload はローカルファイルをチャンク単位でアップロードするクラス
+    media = MediaFileUpload(local_path, mimetype="application/pdf")
+    service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields="id"
+    ).execute()
+    print(f"  [アップロード] Drive renamed: {file_name}")
 
 
 def move_to_processed_on_drive(service, file_name):

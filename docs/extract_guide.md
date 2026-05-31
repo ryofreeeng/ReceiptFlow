@@ -597,6 +597,9 @@ def build_record(filename, text, config):
     if amount is not None and amount < 100:
         review = True
 
+    stem = os.path.splitext(filename)[0]
+    source_pdf = re.sub(r'_page\d+.*', '', stem) + ".pdf"
+
     return {
         "filename":       filename,
         "date":           extract_date(text),
@@ -606,6 +609,7 @@ def build_record(filename, text, config):
         "credit_account": config["credit_account"],
         "credit_amount":  amount,
         "needs_review":   review,
+        "source_pdf":     source_pdf,
     }
 ```
 
@@ -637,6 +641,10 @@ C# でいう `store ?? "（品目不明）"` と同じ。
 | `credit_account` | 貸方科目（`config.toml` の値） |
 | `credit_amount` | 貸方金額（合計金額と同じ値） |
 | `needs_review` | 要チェックフラグ（`True`/`False`） |
+| `source_pdf` | 元PDFのファイル名。`filename`（txtファイル名）から `_page{n}.*` を除いて復元する |
+
+**`source_pdf` の復元ロジック：**  
+OCR時にページごとのtxtファイルが `{元PDF名}_page{n}_zoom{zoom}.txt` という名前で保存される。`re.sub(r'_page\d+.*', '', stem)` で `_page1_zoom2.0` 以降を切り捨てることで元のPDF名を得ている。
 
 ---
 
@@ -647,7 +655,7 @@ C# でいう `store ?? "（品目不明）"` と同じ。
 ```python
 _BOOK_NAME_PREFIX = "対面領収証の帳簿"
 _SHEET_NAME       = "帳簿"
-_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック"]
+_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック", "元PDFファイル名"]
 ```
 
 - `_BOOK_NAME_PREFIX`：既存ファイルを検索するときのキーワードにもなる
@@ -688,14 +696,48 @@ def _to_row(record):
         record["credit_account"],
         record["credit_amount"] or "",
         "要確認" if record["needs_review"] else "",
+        record["source_pdf"],
     ]
 
 def _sort_key(row):
     return row[0] or "9999-99-99"
 ```
 
-- `_to_row()`：record 辞書を Excel の1行分のリストに変換する。`needs_review` が `True` なら `"要確認"`、`False` なら空文字
+- `_to_row()`：record 辞書を Excel の1行分のリスト（8要素）に変換する。`needs_review` が `True` なら `"要確認"`、`False` なら空文字
 - `_sort_key()`：行リストの0列目（日付）をソートキーとして返す。日付が空のレコードは末尾に送る
+
+---
+
+### `_to_row(r) + [write_datetime]` ― リストの連結
+
+`write_to_excel()` 内でこの形で呼ばれる：
+
+```python
+write_datetime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+new_rows = sorted([_to_row(r) + [write_datetime] for r in records], key=_sort_key)
+```
+
+**`+` がリストに使われるとPythonでは「連結」になる。**
+
+```python
+[1, 2, 3] + [4]   # → [1, 2, 3, 4]
+```
+
+数値の足し算ではなく、右辺のリストを左辺の末尾につなげた新しいリストを作る。
+
+今回の場合：
+```
+_to_row(r)     →  ["2025-05-10", "卵など", "消耗品費", 1580, ...]  （8要素）
+[write_datetime] →  ["2025-05-31 15:30:22"]                          （1要素）
++で連結         →  ["2025-05-10", "卵など", ..., "2025-05-31 15:30:22"]（9要素）
+```
+
+`[write_datetime]` と `[]` でリストにしているのは、連結には「リスト + リスト」が必要なため。`write_datetime` のまま（文字列）だと `+` はエラーになる。
+
+C# でいう `row.Add(writeDateTime)` に相当するが、Pythonでは元のリストを変更せず「新しいリストを返す」点が異なる。
+
+**`write_datetime` を関数冒頭で1回だけ生成する理由**：  
+同じ実行で書き込まれた行が「どのバッチか」を後から識別できるように、同じ実行内の全行が同じ日時を持つ設計にしている。行ごとに `datetime.now()` を呼ぶと全行で微妙に異なる時刻になってしまう。
 
 ---
 
@@ -737,41 +779,42 @@ wb.save(path)                       # ファイルを保存
 
 ---
 
-## `select_debug_session()`（OCR中間ファイルのセッション選択）
+## `select_session(base_dir)`（セッション選択）
 
 ```python
-def select_debug_session():
-    if not os.path.exists(DEBUG_DIR):
-        print(f"デバッグフォルダが見つかりません: {DEBUG_DIR}")
+def select_session(base_dir):
+    if not os.path.exists(base_dir):
+        print(f"フォルダが見つかりません: {base_dir}")
         return None
 
     sessions = sorted(
-        d for d in os.listdir(DEBUG_DIR)
-        if os.path.isdir(os.path.join(DEBUG_DIR, d))
+        d for d in os.listdir(base_dir)
+        if os.path.isdir(os.path.join(base_dir, d))
     )
 
     if not sessions:
-        print("デバッグフォルダにセッションが見つかりませんでした。")
+        print("セッションが見つかりませんでした。")
         return None
 
     print("処理するセッションを選択してください：")
     for i, session in enumerate(sessions, 1):
         print(f"  {i}: {session}")
 
-    try:
-        choice = int(input("番号を入力: "))
+    while True:
+        try:
+            choice = int(input("番号を入力: "))
+        except ValueError:
+            print("数字を入力してください。")
+            continue
         if not (1 <= choice <= len(sessions)):
-            print("無効な番号です。")
-            return None
-    except ValueError:
-        print("数字を入力してください。")
-        return None
-
-    return os.path.join(DEBUG_DIR, sessions[choice - 1])
+            print(f"1〜{len(sessions)} の番号を入力してください。")
+            continue
+        return os.path.join(base_dir, sessions[choice - 1])
 ```
 
-**役割**：`receipts/debug/` 内のセッションフォルダを一覧表示してユーザーに番号を選ばせ、選択したフォルダの絶対パスを返す。  
-`ocr.py` を実行するたびにセッションフォルダが作られるため、複数ある中から選べるようにしている。
+**役割**：`base_dir` 内のセッションフォルダを一覧表示してユーザーに番号を選ばせ、選択したフォルダの絶対パスを返す。  
+スタンドアロン実行では `INTERMEDIATE_DIR`（`receipts/intermediate/`）を渡す。`pipeline.py` の `step_extract()` からも同じ関数を呼び出している。  
+有効な番号が入力されるまで `while True` でリトライする。
 
 ### `sorted(d for d in os.listdir(...) if ...)` とは
 

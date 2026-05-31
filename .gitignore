@@ -22,6 +22,7 @@ output/*
 !output/.gitkeep
 receipts/debug/
 receipts/intermediate/
+receipts/renamed/
 logs/
 
 # Python
