@@ -21,6 +21,8 @@ receipts/processed/*
 output/*
 !output/.gitkeep
 receipts/debug/
+receipts/intermediate/
+logs/
 
 # Python
 __pycache__/

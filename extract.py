@@ -308,6 +308,11 @@ def build_record(filename, text, config):
     if amount is not None and amount < 100:
         review = True
 
+    # txtファイル名から元のPDFファイル名を復元する
+    # "_page{数字}" 以降（zoom値・前処理フラグを含む）を切り捨ててPDF名に変換する
+    stem = os.path.splitext(filename)[0]
+    source_pdf = re.sub(r'_page\d+.*', '', stem) + ".pdf"
+
     return {
         "filename":       filename,
         "date":           extract_date(text),
@@ -317,6 +322,7 @@ def build_record(filename, text, config):
         "credit_account": config["credit_account"],
         "credit_amount":  amount,               # 借り方と同じ金額を使う
         "needs_review":   review,
+        "source_pdf":     source_pdf,
     }
 
 
@@ -327,7 +333,7 @@ def build_record(filename, text, config):
 # 出力する Excel の設定
 _BOOK_NAME_PREFIX = "対面領収証の帳簿"   # ファイル名の先頭部分（既存ファイルの検索にも使う）
 _SHEET_NAME       = "帳簿"
-_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック"]
+_HEADERS = ["日付", "摘要", "借方科目", "借方金額", "貸方科目", "貸方金額", "要チェック", "元PDFファイル名"]
 
 
 def _find_latest_book(output_dir):
@@ -356,6 +362,7 @@ def _to_row(record):
         record["credit_account"],
         record["credit_amount"] or "",
         "要確認" if record["needs_review"] else "",
+        record["source_pdf"],
     ]
 
 
