@@ -12,7 +12,7 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # OCR デバッグ出力の親フォルダ（セッション選択の対象）
-DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
+INTERMEDIATE_DIR = os.path.join(BASE_DIR, "receipts", "intermediate")
 
 # Excel 出力先フォルダ
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
@@ -427,37 +427,38 @@ def write_to_excel(records, output_dir, config):
 # セッション選択・テキスト読み込み
 # ------------------------------------------------------------------ #
 
-def select_debug_session():
-    """DEBUG_DIR 内のセッションフォルダを一覧表示してユーザーに選択させる。
-    選択されたフォルダの絶対パスを返す。キャンセルされた場合は None を返す。"""
-    if not os.path.exists(DEBUG_DIR):
-        print(f"デバッグフォルダが見つかりません: {DEBUG_DIR}")
+def select_session(base_dir):
+    """base_dir 内のセッションフォルダを一覧表示してユーザーに選択させる。
+    選択されたフォルダの絶対パスを返す。セッションがなければ None を返す。
+    有効な番号が入力されるまで再入力を促す。"""
+    if not os.path.exists(base_dir):
+        print(f"フォルダが見つかりません: {base_dir}")
         return None
 
     # サブフォルダのみを対象とする
     sessions = sorted(
-        d for d in os.listdir(DEBUG_DIR)
-        if os.path.isdir(os.path.join(DEBUG_DIR, d))
+        d for d in os.listdir(base_dir)
+        if os.path.isdir(os.path.join(base_dir, d))
     )
 
     if not sessions:
-        print("デバッグフォルダにセッションが見つかりませんでした。")
+        print("セッションが見つかりませんでした。")
         return None
 
     print("処理するセッションを選択してください：")
     for i, session in enumerate(sessions, 1):
         print(f"  {i}: {session}")
 
-    try:
-        choice = int(input("番号を入力: "))
+    while True:
+        try:
+            choice = int(input("番号を入力: "))
+        except ValueError:
+            print("数字を入力してください。")
+            continue
         if not (1 <= choice <= len(sessions)):
-            print("無効な番号です。")
-            return None
-    except ValueError:
-        print("数字を入力してください。")
-        return None
-
-    return os.path.join(DEBUG_DIR, sessions[choice - 1])
+            print(f"1〜{len(sessions)} の番号を入力してください。")
+            continue
+        return os.path.join(base_dir, sessions[choice - 1])
 
 
 def load_ocr_texts(session_dir):
@@ -480,7 +481,7 @@ def load_ocr_texts(session_dir):
 
 def main():
     # セッションフォルダをユーザーに選択してもらう
-    session_dir = select_debug_session()
+    session_dir = select_session(INTERMEDIATE_DIR)
     if not session_dir:
         return
 

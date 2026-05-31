@@ -93,13 +93,15 @@ px = pt × ZOOM
 
 ---
 
-### `DEBUG_DIR`
+### `INTERMEDIATE_DIR`
 
 ```python
-DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
+INTERMEDIATE_DIR = os.path.join(BASE_DIR, "receipts", "intermediate")
 ```
 
-デバッグ出力の親フォルダ。実際の出力先は `main()` が実行ごとに `zoom値_日時` のサブフォルダを作って使う。
+OCR結果テキストの出力先となる親フォルダ。実際の出力先は実行ごとにタイムスタンプのサブフォルダを作って使う（例：`receipts/intermediate/20250531-143022/`）。
+
+パイプライン経由での実行時は `pipeline.py` の `setup_session()` がセッションIDのフォルダを作成し、そのパスを `step_ocr()` から `process_pdf()` に渡す。スタンドアロン実行時は `main()` がフォルダを作成する。どちらも同じフォルダ（`receipts/intermediate/`）を使うため、スタンドアロンで生成したテキストをパイプラインの抽出ステップで処理することもできる。
 
 ---
 
@@ -778,13 +780,65 @@ sum((s for _, s in debug_pairs))  # 同じ意味（省略前）
 
 ## `main()` 関数
 
+## `list_pdfs(unprocessed_dir)` 関数
+
+指定フォルダ内の PDF ファイルのパス一覧を返す。
+
+```python
+def list_pdfs(unprocessed_dir):
+    return [
+        os.path.join(unprocessed_dir, f)
+        for f in sorted(os.listdir(unprocessed_dir))
+        if f.lower().endswith(".pdf")
+    ]
+```
+
+戻り値はフルパスのリスト（例：`["/path/to/receipts/unprocessed/receipt.pdf", ...]`）。
+
+- `sorted()` でファイル名順に並べる（処理順を安定させるため）
+- `.lower()` で `.PDF` など大文字拡張子も拾う
+- `os.path.join()` でフルパスに変換する（後続の `process_pdf()` がパスを受け取るため）
+
+`pipeline.py` の `step_ocr()` と `main()` の両方から呼ばれる。
+
+---
+
+## `process_pdf(pdf_path, session_dir, reader)` 関数
+
+PDF 1件を OCR 処理してテキストを session_dir に保存する。
+
+```python
+def process_pdf(pdf_path, session_dir, reader):
+    filename = os.path.basename(pdf_path)
+    images_with_stems = pdf_to_images(pdf_path, session_dir)
+    text = extract_text_from_images(images_with_stems, reader, session_dir)
+    print(text)
+```
+
+| 引数 | 内容 |
+|---|---|
+| `pdf_path` | 処理対象 PDF のフルパス |
+| `session_dir` | テキスト・画像の保存先フォルダ（`None` なら保存しない） |
+| `reader` | `init_reader()` が返す OCR エンジンオブジェクト |
+
+**`reader` を引数で受け取る理由：**  
+PaddleOCR はモデルのロードに数秒〜十数秒かかる。1ファイルごとに初期化すると10枚処理で10倍の時間がかかる。そのため呼び出し元（`step_ocr()` または `main()`）で1回だけ初期化して使い回す設計にしている。
+
+---
+
+## `main()` 関数（スタンドアロン実行）
+
 ### `init_reader()`
 
 `OCR_ENGINE` の設定に応じたエンジンを初期化して返す。`main()` で1回だけ呼び出し、以降は全PDFの処理に同じオブジェクトを使い回す（毎回初期化するとモデルのロードが繰り返されるため）。詳細は `init_reader()` のセクション参照。
 
-### `[f for f in os.listdir(UNPROCESSED_DIR) if f.lower().endswith(".pdf")]`
+### `list_pdfs(UNPROCESSED_DIR)`
 
-フォルダ内のファイルを一覧取得し、拡張子が `.pdf` のものだけを絞り込む。
+PDF パス一覧を取得する。詳細は `list_pdfs()` のセクション参照。
+
+### `[f for f in os.listdir(UNPROCESSED_DIR) if f.lower().endswith(".pdf")]` ※旧コード参考
+
+以前の `main()` では直接フォルダを検索していたが、現在は `list_pdfs()` に切り出されている。
 
 - `os.listdir(dir)` はフォルダ内のファイル名リストを返す
 - `.lower()` は大文字小文字を統一する（`.PDF` にも対応するため）

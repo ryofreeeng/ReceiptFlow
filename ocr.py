@@ -18,7 +18,7 @@ else:
 UNPROCESSED_DIR = os.path.join(BASE_DIR, "receipts", "unprocessed")
 
 # デバッグ出力の親フォルダ。実行ごとにこの下にサブフォルダが作られる
-DEBUG_DIR = os.path.join(BASE_DIR, "receipts", "debug")
+INTERMEDIATE_DIR = os.path.join(BASE_DIR, "receipts", "intermediate")
 
 # --- OCRエンジンの選択 ---
 # この1行を変えるだけでエンジンを切り替えられる
@@ -315,43 +315,57 @@ def extract_text_from_images(images_with_stems, reader, session_dir):
     return "\n\n".join(all_text)
 
 
+def list_pdfs(unprocessed_dir):
+    """unprocessed_dir 内の PDF ファイルのパス一覧を返す。"""
+    return [
+        os.path.join(unprocessed_dir, f)
+        for f in sorted(os.listdir(unprocessed_dir))
+        if f.lower().endswith(".pdf")
+    ]
+
+
+def process_pdf(pdf_path, session_dir, reader):
+    """PDF 1件を OCR 処理し、テキストを session_dir に保存する。
+
+    pdf_path   : 処理対象 PDF のパス
+    session_dir: テキスト・画像の保存先フォルダ（None なら保存しない）
+    reader     : init_reader() が返す OCR エンジン。複数ファイル処理時は
+                 呼び出し元で1回だけ初期化して使い回すこと
+    """
+    filename = os.path.basename(pdf_path)
+    print(f"処理中: {filename}")
+
+    images_with_stems = pdf_to_images(pdf_path, session_dir)
+    print(f"  {len(images_with_stems)}ページを画像に変換しました")
+
+    text = extract_text_from_images(images_with_stems, reader, session_dir)
+
+    print(f"\n--- {filename} の抽出テキスト ---")
+    print(text)
+    print("-" * 40 + "\n")
+
+
 def main():
-    # OCR_ENGINEの設定に応じたエンジンを初期化する
     reader = init_reader()
 
-    # SAVE_DEBUG=True のとき、実行ごとに「エンジン名_zoom値_日時」のフォルダを作成する
-    # エンジン名も含めることで、EasyOCRとPaddleOCRの結果を並べて比較できる
     if SAVE_DEBUG:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_dir = os.path.join(DEBUG_DIR, f"{OCR_ENGINE}_zoom{ZOOM}_{timestamp}")
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        session_dir = os.path.join(INTERMEDIATE_DIR, timestamp)
         os.makedirs(session_dir, exist_ok=True)
-        print(f"デバッグ出力先: {session_dir}")
+        print(f"出力先: {session_dir}")
     else:
         session_dir = None
 
-    # unprocessedフォルダ内のPDFファイルを一覧取得する
-    pdf_files = [f for f in os.listdir(UNPROCESSED_DIR) if f.lower().endswith(".pdf")]
+    pdf_paths = list_pdfs(UNPROCESSED_DIR)
 
-    if not pdf_files:
+    if not pdf_paths:
         print("unprocessedフォルダにPDFが見つかりませんでした。")
         return
 
-    print(f"\n{len(pdf_files)}件のPDFを処理します...\n")
+    print(f"\n{len(pdf_paths)}件のPDFを処理します...\n")
 
-    for filename in pdf_files:
-        pdf_path = os.path.join(UNPROCESSED_DIR, filename)
-        print(f"処理中: {filename}")
-
-        # PDFの各ページを画像に変換する。戻り値は (numpy配列, ステム) のリスト
-        images_with_stems = pdf_to_images(pdf_path, session_dir)
-        print(f"  {len(images_with_stems)}ページを画像に変換しました")
-
-        # 全ページのテキストを抽出する
-        text = extract_text_from_images(images_with_stems, reader, session_dir)
-
-        print(f"\n--- {filename} の抽出テキスト ---")
-        print(text)
-        print("-" * 40 + "\n")
+    for pdf_path in pdf_paths:
+        process_pdf(pdf_path, session_dir, reader)
 
 
 if __name__ == "__main__":

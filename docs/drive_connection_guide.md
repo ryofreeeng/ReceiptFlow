@@ -109,17 +109,23 @@ TOKEN_FILE = "token.json"
 
 ---
 
-### UNPROCESSED_FOLDER_ID
+### UNPROCESSED_FOLDER_ID / PROCESSED_FOLDER_ID
 
 ```python
 UNPROCESSED_FOLDER_ID = os.environ["UNPROCESSED_FOLDER_ID"]
+PROCESSED_FOLDER_ID   = os.environ["PROCESSED_FOLDER_ID"]
 ```
 
-Drive内の `unprocessed` フォルダのID。`.env` から読み込む。フォルダIDはDriveでフォルダを開いたときのURLの末尾：
+Drive内のフォルダID。`.env` から読み込む。フォルダIDはDriveでフォルダを開いたときのURLの末尾：
 
 ```
 https://drive.google.com/drive/folders/★ここ★
 ```
+
+| 定数 | 対応フォルダ | 用途 |
+|---|---|---|
+| `UNPROCESSED_FOLDER_ID` | Drive の unprocessed フォルダ | PDF一覧取得・ダウンロード元 |
+| `PROCESSED_FOLDER_ID` | Drive の processed フォルダ | 処理済みPDFの移動先 |
 
 `os.environ["キー名"]` はキーが存在しない場合に `KeyError` を発生させる。意図的にそうしている（値がなければ起動時に即エラーにして、後から気づくより早く問題を発見するため）。
 
@@ -263,16 +269,24 @@ Drive APIに接続するサービスオブジェクトを生成するメソッ�
 
 ---
 
-## `main()` 関数
+## `list_unprocessed_files(service)` 関数
 
-### `service.files().list(q=..., fields=...)`
+Drive の unprocessed フォルダ内にある PDF の一覧を返す。
 
 ```python
-results = service.files().list(
-    q=f"'{UNPROCESSED_FOLDER_ID}' in parents and mimeType='application/pdf'",
-    fields="files(id, name, mimeType)"
-).execute()
+def list_unprocessed_files(service):
+    results = service.files().list(
+        q=(f"'{UNPROCESSED_FOLDER_ID}' in parents"
+           " and mimeType='application/pdf'"
+           " and trashed=false"),
+        fields="files(id, name)"
+    ).execute()
+    return results.get("files", [])
 ```
+
+戻り値は `[{"id": "...", "name": "receipt.pdf"}, ...]` のリスト。
+
+### `service.files().list(q=..., fields=...)`
 
 Driveのファイル一覧を取得するAPIメソッド。
 
@@ -356,7 +370,74 @@ while True:
 
 ---
 
-## PDFダウンロード処理
+## `download_file(service, file_info, local_dir)` 関数
+
+PDF 1件をローカルにダウンロードする。
+
+```python
+def download_file(service, file_info, local_dir):
+    save_path = os.path.join(local_dir, file_info["name"])
+    request = service.files().get_media(fileId=file_info["id"])
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    with open(save_path, "wb") as out:
+        out.write(buffer.getvalue())
+```
+
+| 引数 | 内容 |
+|---|---|
+| `service` | `get_drive_service()` が返すサービスオブジェクト |
+| `file_info` | `list_unprocessed_files()` の戻り値の要素。`{"id": ..., "name": ...}` の辞書 |
+| `local_dir` | ダウンロード先のローカルフォルダパス（`UNPROCESSED_DIR` を渡す） |
+
+---
+
+## `move_to_processed_on_drive(service, file_name)` 関数
+
+Drive 上でファイルを unprocessed フォルダから processed フォルダに移動する。
+
+```python
+def move_to_processed_on_drive(service, file_name):
+    results = service.files().list(
+        q=(f"'{UNPROCESSED_FOLDER_ID}' in parents"
+           f" and name='{file_name}'"
+           " and trashed=false"),
+        fields="files(id)"
+    ).execute()
+    files = results.get("files", [])
+    if not files:
+        raise FileNotFoundError(f"Drive の unprocessed に '{file_name}' が見つかりません")
+
+    file_id = files[0]["id"]
+    service.files().update(
+        fileId=file_id,
+        addParents=PROCESSED_FOLDER_ID,
+        removeParents=UNPROCESSED_FOLDER_ID,
+        fields="id, parents"
+    ).execute()
+```
+
+### Drive APIに「移動」はない
+
+Drive API はファイルの「移動」を親フォルダの変更で実現する：
+- `addParents`：新しい親フォルダID（processed）を追加
+- `removeParents`：古い親フォルダID（unprocessed）を削除
+
+この2つを同時に指定することで「移動」になる。C#の `File.Move()` のような専用メソッドはない。
+
+### 事前にファイルをIDで検索する理由
+
+`move_to_processed_on_drive()` は `file_name`（ファイル名の文字列）を受け取るが、Drive API のファイル操作には `fileId` が必要。そのため最初に `files().list()` でファイル名からIDを検索している。
+
+**なぜ最初から `file_id` を引数にしないのか：**  
+ダウンロード（Step 1）と移動（Step 3）は別のステップで実行される。ダウンロード時に取得した `file_id` をStep 3まで保持する仕組みが現状ないため、移動時に名前で再検索している。
+
+---
+
+## PDFダウンロード処理（内部実装の詳細）
 
 ### `service.files().get_media(fileId=f["id"])`
 
@@ -428,3 +509,27 @@ with open(save_path, "wb") as out:
 OSに合わせたファイルパスを組み立てる関数。Mac/Linuxでは `/` で、Windowsでは `\` で区切られたパスを返す。
 
 `BASE_DIR` を先頭に渡すことで、スクリプト・exe・タスクスケジューラのどこから実行しても正しい保存先が組み立てられる。文字列結合でも書けるが `os.path.join` を使うと移植性が高まる。
+
+---
+
+## `main()` 関数
+
+スタンドアロン実行時のエントリポイント。内部で上記の関数を呼び出す薄いラッパー。
+
+```python
+def main():
+    print("Google Drive APIに接続中...")
+    service = get_drive_service()
+
+    files = list_unprocessed_files(service)
+    if not files:
+        print("unprocessedフォルダにPDFが見つかりませんでした。")
+        return
+
+    unprocessed_dir = os.path.join(BASE_DIR, "receipts", "unprocessed")
+    print(f"\n接続成功！{len(files)}件のPDFをダウンロードします...")
+    for file_info in files:
+        download_file(service, file_info, unprocessed_dir)
+```
+
+パイプライン経由で実行する場合は `pipeline.py` の `step_download()` が同じ関数群を呼び出す。

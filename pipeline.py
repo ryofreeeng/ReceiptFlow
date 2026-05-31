@@ -4,6 +4,7 @@ import datetime
 import shutil
 import traceback
 import tomllib
+import re
 
 # スクリプト・exe どちらの実行方法でも正しいプロジェクトルートを取得する
 if getattr(sys, 'frozen', False):
@@ -84,43 +85,54 @@ def _log_error(log_dir, step_name, context, exc):
 
 
 # ------------------------------------------------------------------ #
+# ユーティリティ
+# ------------------------------------------------------------------ #
+
+def _has_ocr_texts(session_dir):
+    """セッションフォルダに処理対象の OCR テキストファイルが存在するか確認する。
+    _scores.txt（信頼度ファイル）は対象外。"""
+    if not os.path.exists(session_dir):
+        return False
+    return any(
+        f.endswith(".txt") and not f.endswith("_scores.txt")
+        for f in os.listdir(session_dir)
+    )
+
+
+# ------------------------------------------------------------------ #
 # 実行ステップ
 # ------------------------------------------------------------------ #
 
 def step_download(session_id, log_dir, config):
-    """Step 1：Google Drive の unprocessed フォルダから PDF をローカルにダウンロードする。
+    """Step 1：Google Drive の unprocessed フォルダから PDF をローカルにダウンロードする。"""
+    from drive_connection import get_drive_service, list_unprocessed_files, download_file
 
-    呼び出す関数（drive_connection.py に追加が必要）：
-      - get_drive_service() ... 既存。Drive API の認証・接続
-      - list_unprocessed_files(service) ... 未実装。Driveのunprocessedフォルダ内のPDF一覧を返す
-      - download_file(service, file_info, local_dir) ... 未実装。PDF を1件ダウンロードする
-    """
     print("\n[Step 1] ダウンロード開始")
-    # from drive_connection import get_drive_service, list_unprocessed_files, download_file
-    #
-    # --- フェーズごとに独立した try で囲む ---
-    # → どのフェーズで失敗したかを文字列で直接指定できる（context 変数は不要）
-    #
-    # try:
-    #     service = get_drive_service()
-    # except Exception as e:
-    #     _log_error(log_dir, "step_download", "Drive認証", e)
-    #     return  # 認証失敗は続行不可
-    #
-    # try:
-    #     files = list_unprocessed_files(service)
-    # except Exception as e:
-    #     _log_error(log_dir, "step_download", "ファイル一覧取得", e)
-    #     return  # 一覧取得失敗は続行不可
-    #
-    # --- ダウンロードフェーズ（1件失敗しても残りのファイルを続ける）---
-    # for file_info in files:
-    #     try:
-    #         download_file(service, file_info, UNPROCESSED_DIR)
-    #         print(f"  [成功] ダウンロード: {file_info['name']}")
-    #     except Exception as e:
-    #         _log_error(log_dir, "step_download", f"ダウンロード: {file_info['name']}", e)
-    print("[Step 1] ダウンロード完了（未実装）")
+
+    try:
+        service = get_drive_service()
+    except Exception as e:
+        _log_error(log_dir, "step_download", "Drive認証", e)
+        return
+
+    try:
+        files = list_unprocessed_files(service)
+    except Exception as e:
+        _log_error(log_dir, "step_download", "ファイル一覧取得", e)
+        return
+
+    if not files:
+        print("  unprocessed フォルダに PDF が見つかりませんでした。")
+        return
+
+    print(f"  {len(files)}件の PDF をダウンロードします...")
+    for file_info in files:
+        try:
+            download_file(service, file_info, UNPROCESSED_DIR)
+        except Exception as e:
+            _log_error(log_dir, "step_download", f"ダウンロード: {file_info['name']}", e)
+
+    print("[Step 1] ダウンロード完了")
 
 
 def step_ocr(session_id, log_dir, config):
@@ -130,26 +142,40 @@ def step_ocr(session_id, log_dir, config):
       - list_pdfs(unprocessed_dir) ... 未実装。unprocessedフォルダ内のPDFパス一覧を返す
       - process_pdf(pdf_path, session_dir) ... 未実装。PDF 1件をOCRしてテキストを出力する
     """
+    from ocr import init_reader, list_pdfs, process_pdf
+
     print("\n[Step 2] OCR 処理開始")
-    # from ocr import list_pdfs, process_pdf
-    #
-    # try:
-    #     pdfs = list_pdfs(UNPROCESSED_DIR)
-    # except Exception as e:
-    #     _log_error(log_dir, "step_ocr", "PDFファイル一覧取得", e)
-    #     return  # 一覧取得失敗は続行不可
-    #
-    # session_dir = os.path.join(INTERMEDIATE_DIR, session_id)
-    # os.makedirs(session_dir, exist_ok=True)   # exist_ok=True のため基本的に失敗しない
-    #
+
+    # --- 準備フェーズ ---
+    try:
+        reader = init_reader()
+    except Exception as e:
+        _log_error(log_dir, "step_ocr", "OCRエンジン初期化", e)
+        return
+
+    try:
+        pdfs = list_pdfs(UNPROCESSED_DIR)
+    except Exception as e:
+        _log_error(log_dir, "step_ocr", "PDFファイル一覧取得", e)
+        return
+
+    if not pdfs:
+        print("  unprocessedフォルダにPDFが見つかりませんでした。")
+        return
+
+    session_dir = os.path.join(INTERMEDIATE_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+
     # --- OCRフェーズ（1件失敗しても残りのPDFを続ける）---
-    # for pdf_path in pdfs:
-    #     try:
-    #         process_pdf(pdf_path, session_dir)
-    #         print(f"  [成功] OCR: {os.path.basename(pdf_path)}")
-    #     except Exception as e:
-    #         _log_error(log_dir, "step_ocr", f"OCR処理: {os.path.basename(pdf_path)}", e)
-    print("[Step 2] OCR 処理完了（未実装）")
+    print(f"\n  {len(pdfs)}件のPDFを処理します...")
+    for pdf_path in pdfs:
+        try:
+            process_pdf(pdf_path, session_dir, reader)
+            print(f"  [成功] OCR: {os.path.basename(pdf_path)}")
+        except Exception as e:
+            _log_error(log_dir, "step_ocr", f"OCR処理: {os.path.basename(pdf_path)}", e)
+
+    print("[Step 2] OCR 処理完了")
 
 
 def step_extract(session_id, log_dir, config):
@@ -161,47 +187,67 @@ def step_extract(session_id, log_dir, config):
       - move_local_to_processed(pdf_name) ... このファイルに実装（下記）
       - drive_connection.py の move_to_processed_on_drive() ... 未実装
     """
+    from extract import load_ocr_texts, build_record, write_to_excel, select_session
+
     print("\n[Step 3] 情報抽出・Excel 出力開始")
-    # from extract import load_ocr_texts, build_record, write_to_excel
-    #
-    # try:
-    #     session_dir = os.path.join(INTERMEDIATE_DIR, session_id)
-    #     texts = load_ocr_texts(session_dir)
-    # except Exception as e:
-    #     _log_error(log_dir, "step_extract", "テキストファイル読み込み", e)
-    #     return  # 読み込み失敗は続行不可
-    #
+
+    # --- セッション選択 ---
+    # OCR が直前に動いた場合（モード1・3）は今回のセッションフォルダを使う。
+    # テキストがない場合（モード6：抽出のみ）はユーザーに選択させる。
+    session_dir = os.path.join(INTERMEDIATE_DIR, session_id)
+    if not _has_ocr_texts(session_dir):
+        print("  今回のセッションに OCR テキストがありません。処理するセッションを選択してください。")
+        session_dir = select_session(INTERMEDIATE_DIR)
+        if session_dir is None:
+            print("  [中断] セッションが選択されませんでした。")
+            return
+
+    # --- テキスト読み込み ---
+    try:
+        texts = load_ocr_texts(session_dir)
+    except Exception as e:
+        _log_error(log_dir, "step_extract", "テキストファイル読み込み", e)
+        return
+
     # --- 層1：1ファイルごとの情報抽出（失敗しても次のファイルへ進む）---
-    # records = []
-    # succeeded_pdf_names = []
-    # for filename, text in texts.items():
-    #     try:
-    #         record = build_record(filename, text, config)
-    #         records.append(record)
-    #         succeeded_pdf_names.append(filename.replace(".txt", ".pdf"))
-    #     except Exception as e:
-    #         _log_error(log_dir, "step_extract", f"情報抽出: {filename}", e)
-    #
+    records = []
+    succeeded_pdf_names = []
+    seen_pdf_names = set()  # 重複排除用（マルチページPDF対応）
+    for filename, text in texts.items():
+        try:
+            record = build_record(filename, text, config)
+            records.append(record)
+            # txtファイル名から元のPDF名を復元する
+            # "_page{数字}" 以降（zoom値・前処理フラグを含む）を切り捨てる
+            stem = os.path.splitext(filename)[0]
+            pdf_name = re.sub(r'_page\d+.*', '', stem) + ".pdf"
+            if pdf_name not in seen_pdf_names:
+                seen_pdf_names.add(pdf_name)
+                succeeded_pdf_names.append(pdf_name)
+        except Exception as e:
+            _log_error(log_dir, "step_extract", f"情報抽出: {filename}", e)
+
     # --- 層2a：Excel書き込み（失敗したらファイル移動には進まない）---
-    # try:
-    #     write_to_excel(records, OUTPUT_DIR, config)
-    # except Exception as e:
-    #     _log_error(log_dir, "step_extract", "Excel書き込み", e)
-    #     return  # ファイル移動には進まない
-    #
+    try:
+        write_to_excel(records, OUTPUT_DIR, config)
+    except Exception as e:
+        _log_error(log_dir, "step_extract", "Excel書き込み", e)
+        return
+
     # --- 層2b：ファイル移動（Excelが成功した場合のみ実行）---
-    # for pdf_name in succeeded_pdf_names:
-    #     # ローカル移動と Drive 移動はそれぞれ独立して try する
-    #     # （一方が失敗しても他方を試みる）
-    #     try:
-    #         move_local_to_processed(pdf_name)
-    #     except Exception as e:
-    #         _log_error(log_dir, "step_extract", f"ローカル移動: {pdf_name}", e)
-    #     try:
-    #         move_drive_to_processed(pdf_name, log_dir)
-    #     except Exception as e:
-    #         _log_error(log_dir, "step_extract", f"Drive移動: {pdf_name}", e)
-    print("[Step 3] 情報抽出・Excel 出力完了（未実装）")
+    for pdf_name in succeeded_pdf_names:
+        # ローカル移動と Drive 移動はそれぞれ独立して try する
+        # （一方が失敗しても他方を試みる）
+        try:
+            move_local_to_processed(pdf_name)
+        except Exception as e:
+            _log_error(log_dir, "step_extract", f"ローカル移動: {pdf_name}", e)
+        try:
+            move_drive_to_processed(pdf_name, log_dir)
+        except Exception as e:
+            _log_error(log_dir, "step_extract", f"Drive移動: {pdf_name}", e)
+
+    print("[Step 3] 情報抽出・Excel 出力完了")
 
 
 # ------------------------------------------------------------------ #
@@ -227,15 +273,10 @@ def move_local_to_processed(pdf_name):
 
 
 def move_drive_to_processed(pdf_name, log_dir):
-    """処理済み PDF を Drive の unprocessed から processed に移動する。
-
-    呼び出す関数（drive_connection.py に追加が必要）：
-      - move_to_processed_on_drive(service, file_name, log_dir) ... 未実装
-    """
-    # from drive_connection import get_drive_service, move_to_processed_on_drive
-    # service = get_drive_service()
-    # move_to_processed_on_drive(service, pdf_name, log_dir)
-    print(f"  [移動] Drive: {pdf_name} → processed/（未実装）")
+    """処理済み PDF を Drive の unprocessed から processed に移動する。"""
+    from drive_connection import get_drive_service, move_to_processed_on_drive
+    service = get_drive_service()
+    move_to_processed_on_drive(service, pdf_name)
 
 
 # ------------------------------------------------------------------ #
