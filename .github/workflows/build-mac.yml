@@ -9,6 +9,11 @@ on:
         required: true         # 入力必須。空欄では実行できない
         type: string
 
+# ─── 権限 ──────────────────────────────────────────────
+# Release へのファイル添付には contents の書き込み権限が必要
+permissions:
+  contents: write
+
 # ─── ジョブ ─────────────────────────────────────────────
 jobs:
   build:
