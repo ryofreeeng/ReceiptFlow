@@ -1,0 +1,50 @@
+name: Mac バイナリ ビルド（手動のみ）
+
+# ─── トリガー ───────────────────────────────────────────
+on:
+  workflow_dispatch:           # Actions タブから手動実行したときだけ動く
+    inputs:
+      version:
+        description: 'タグ名（例: v1.0.0）。Windowsビルドで作成済みのReleaseに追加します'
+        required: true         # 入力必須。空欄では実行できない
+        type: string
+
+# ─── ジョブ ─────────────────────────────────────────────
+jobs:
+  build:
+    runs-on: macos-latest    # Apple Silicon（macos-14相当）で実行
+                             # Intel Mac 向けが必要なら macos-13 に変更する
+
+    steps:
+      # ① ソースコードを Runner にダウンロードする
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      # ② Python をインストールする
+      - name: Python 3.12 をセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ③ アプリの依存ライブラリをインストールする
+      - name: 依存ライブラリをインストール
+        run: pip install -r requirements.txt
+
+      # ④ PyInstaller をインストールする
+      - name: PyInstaller をインストール
+        run: pip install pyinstaller
+
+      # ⑤ Mac バイナリを生成する
+      #    Mac では .exe ではなく拡張子なしの Unix 実行ファイルが生成される
+      #    出力先は dist/ReceiptFlow（拡張子なし）
+      - name: バイナリをビルド
+        run: pyinstaller --onefile --name ReceiptFlow pipeline.py
+
+      # ⑥ 既存の Release にバイナリを追加する
+      #    gh release upload = 既存Release への追加（create ではなく upload）
+      #    --clobber : 同名ファイルが既にあれば上書きする（再実行に対応するため）
+      #    github.event.inputs.version : 手動入力したバージョン番号が入る
+      - name: 既存 Release にバイナリを追加
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.inputs.version }}" "dist/ReceiptFlow" --clobber

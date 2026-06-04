@@ -1,0 +1,53 @@
+name: Windows .exe ビルド   # Actions タブに表示される名前（自由につけてよい）
+
+# ─── トリガー ───────────────────────────────────────────
+on:
+  push:
+    tags:
+      - "v*"    # "v" で始まるタグ（例: v1.0.0）を push したときだけ実行
+
+# ─── ジョブ ─────────────────────────────────────────────
+jobs:
+  build:                       # ジョブ名（自由につけてよい）
+    runs-on: windows-latest    # Windows サーバーで実行（.exe を作るために必須）
+
+    steps:
+      # ① ソースコードを Runner（GitHub のサーバー）にダウンロードする
+      #    これをしないと Runner 上にコードがない状態になる
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      # ② Python をインストールする
+      #    Runner には Python が入っていることもあるが、バージョンを固定するために必ず書く
+      - name: Python 3.12 をセットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"   # ローカル環境と合わせる
+
+      # ③ アプリの依存ライブラリをインストールする（requirements.txt に書いてあるもの全部）
+      - name: 依存ライブラリをインストール
+        run: pip install -r requirements.txt
+
+      # ④ PyInstaller をインストールする
+      #    requirements.txt には入れず、ビルド用途としてここで追加する
+      - name: PyInstaller をインストール
+        run: pip install pyinstaller
+
+      # ⑤ .exe を生成する
+      #    実行後に dist\ReceiptFlow.exe が作られる
+      #    --onefile : 依存ファイルを全部1つの .exe に梱包する
+      #    --name    : 出力ファイル名（ReceiptFlow.exe になる）
+      #    pipeline.py: エントリーポイント（最初に実行されるファイル）
+      - name: .exe をビルド
+        run: pyinstaller --onefile --name ReceiptFlow pipeline.py
+
+      # ⑥ GitHub Release を作成して .exe を添付する
+      #    github.token  : GitHub が自動で発行するトークン。シークレット設定は不要
+      #    github.ref_name : push したタグ名（例: v1.0.0）が自動で入る
+      #    --generate-notes: コミット履歴を元にリリースノートを自動生成する
+      #    shell: bash を指定することで Windows Runner でも bash コマンドが使える
+      - name: GitHub Release を作成して .exe を添付
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" --generate-notes "dist/ReceiptFlow.exe"
