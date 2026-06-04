@@ -30,5 +30,11 @@ __pycache__/
 *.pyc
 *.pyo
 
+# テスト
+.pytest_cache/
+
+# IDE
+.vscode/
+
 # Mac
 .DS_Store
