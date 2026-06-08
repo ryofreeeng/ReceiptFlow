@@ -54,6 +54,7 @@ def setup_session():
     session_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     log_dir = os.path.join(LOG_DIR, session_id)
     os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(UNPROCESSED_DIR, exist_ok=True)
     os.makedirs(PROCESSED_DIR, exist_ok=True)
     os.makedirs(INTERMEDIATE_DIR, exist_ok=True)
     os.makedirs(RENAMED_DIR, exist_ok=True)
@@ -352,7 +353,7 @@ def upload_renamed_to_drive(local_pdf_path):
 
 def select_mode():
     """実行するパターンをユーザーに選択させて番号を返す。
-    有効な番号が入力されるまで何度でも再入力を促す。"""
+    有効な番号が入力されるまで何度でも再入力を促す。0 を返した場合は終了。"""
     print("\n実行するパターンを選択してください：")
     print("  1: 全処理（ダウンロード → OCR → 抽出・Excel出力）")
     print("  2: ダウンロード ＋ OCR")
@@ -360,15 +361,16 @@ def select_mode():
     print("  4: ダウンロードのみ")
     print("  5: OCR のみ")
     print("  6: 抽出・Excel出力のみ")
+    print("  0: 終了")
 
     while True:
         try:
-            mode = int(input("\n番号を入力（1〜6）: "))
+            mode = int(input("\n番号を入力（0〜6）: "))
         except ValueError:
             print("数字を入力してください。もう一度試してください。")
             continue
-        if mode not in range(1, 7):
-            print("1〜6 の番号を入力してください。もう一度試してください。")
+        if mode not in range(0, 7):
+            print("0〜6 の番号を入力してください。もう一度試してください。")
             continue
         return mode
 
@@ -387,30 +389,34 @@ def main():
         print(f"\nReceiptFlow を起動しました（セッション: {session_id}）")
         print(f"ログ出力先: {log_dir}")
 
-        mode = select_mode()
+        while True:
+            mode = select_mode()
 
-        # --- ステップごとに独立した try で囲む ---
-        # 1つのステップで予期しないエラーが起きても、後続ステップを続行できる。
-        # ステップ内部で処理しきれなかった例外だけがここに伝わる。
-        if mode in [1, 2, 4]:
-            try:
-                step_download(session_id, log_dir, config)
-            except Exception as e:
-                _log_error(log_dir, "step_download", "予期しないエラー", e)
+            if mode == 0:
+                break
 
-        if mode in [1, 2, 3, 5]:
-            try:
-                step_ocr(session_id, log_dir, config)
-            except Exception as e:
-                _log_error(log_dir, "step_ocr", "予期しないエラー", e)
+            # --- ステップごとに独立した try で囲む ---
+            # 1つのステップで予期しないエラーが起きても、後続ステップを続行できる。
+            # ステップ内部で処理しきれなかった例外だけがここに伝わる。
+            if mode in [1, 2, 4]:
+                try:
+                    step_download(session_id, log_dir, config)
+                except Exception as e:
+                    _log_error(log_dir, "step_download", "予期しないエラー", e)
 
-        if mode in [1, 3, 6]:
-            try:
-                step_extract(session_id, log_dir, config)
-            except Exception as e:
-                _log_error(log_dir, "step_extract", "予期しないエラー", e)
+            if mode in [1, 2, 3, 5]:
+                try:
+                    step_ocr(session_id, log_dir, config)
+                except Exception as e:
+                    _log_error(log_dir, "step_ocr", "予期しないエラー", e)
 
-        print(f"\nすべての処理が完了しました。")
+            if mode in [1, 3, 6]:
+                try:
+                    step_extract(session_id, log_dir, config)
+                except Exception as e:
+                    _log_error(log_dir, "step_extract", "予期しないエラー", e)
+
+            print(f"\nすべての処理が完了しました。")
 
     except Exception as e:
         # log_dir が確定していない初期化段階のエラー
