@@ -55,13 +55,13 @@ jobs:
       - name: .exe をビルド
         run: pyinstaller --onefile --name ReceiptFlow pipeline.py
 
-      # ⑦ GitHub Release を作成して .exe を添付する
-      #    github.token  : GitHub が自動で発行するトークン。シークレット設定は不要
-      #    github.ref_name : push したタグ名（例: v1.0.0）が自動で入る
-      #    --generate-notes: コミット履歴を元にリリースノートを自動生成する
+      # ⑦ GitHub Release を作成して .exe と使い方ガイドを添付する
+      #    github.token   : GitHub が自動で発行するトークン。シークレット設定は不要
+      #    github.ref_name: push したタグ名（例: v1.0.0）が自動で入る
+      #    --generate-notes: PRの一覧からリリースノートを自動生成（直接 push 運用では比較リンクのみ）
       #    shell: bash を指定することで Windows Runner でも bash コマンドが使える
-      - name: GitHub Release を作成して .exe を添付
+      - name: GitHub Release を作成して .exe と使い方ガイドを添付
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" --generate-notes "dist/ReceiptFlow.exe"
+        run: gh release create "${{ github.ref_name }}" --generate-notes "dist/ReceiptFlow.exe" "docs/ReceiptFlow_exe_使い方.md"
