@@ -4,7 +4,9 @@ name: Windows .exe ビルド   # Actions タブに表示される名前（自由
 on:
   push:
     tags:
-      - "v*"    # "v" で始まるタグ（例: v1.0.0）を push したときだけ実行
+      - "v*"    # "v" で始まるタグ（例: v1.0.0）を push したとき
+    branches:
+      - main    # main への push（PR マージ含む）でも実行してキャッシュを main に保存する
 
 # ─── 権限 ──────────────────────────────────────────────
 # Release の作成・ファイル添付には contents の書き込み権限が必要
@@ -47,20 +49,24 @@ jobs:
       - name: PyInstaller をインストール
         run: pip install pyinstaller
 
-      # ⑥ .exe を生成する
+      # ⑥ .exe を生成する（タグ push のときだけ実行）
+      #    main push 時はキャッシュ作成のみが目的のためスキップする
       #    実行後に dist\ReceiptFlow.exe が作られる
       #    --onefile : 依存ファイルを全部1つの .exe に梱包する
       #    --name    : 出力ファイル名（ReceiptFlow.exe になる）
       #    pipeline.py: エントリーポイント（最初に実行されるファイル）
       - name: .exe をビルド
+        if: startsWith(github.ref, 'refs/tags/')
         run: pyinstaller --onefile --name ReceiptFlow pipeline.py
 
       # ⑦ GitHub Release を作成して .exe と使い方ガイドを添付する
+      #    タグ push のときだけ実行（main push はキャッシュ作成目的のため Release は不要）
       #    github.token   : GitHub が自動で発行するトークン。シークレット設定は不要
       #    github.ref_name: push したタグ名（例: v1.0.0）が自動で入る
       #    --generate-notes: PRの一覧からリリースノートを自動生成（直接 push 運用では比較リンクのみ）
       #    shell: bash を指定することで Windows Runner でも bash コマンドが使える
       - name: GitHub Release を作成して .exe と使い方ガイドを添付
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
