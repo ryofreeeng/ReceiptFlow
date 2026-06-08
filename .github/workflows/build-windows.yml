@@ -29,16 +29,25 @@ jobs:
         with:
           python-version: "3.12"   # ローカル環境と合わせる
 
-      # ③ アプリの依存ライブラリをインストールする（requirements.txt に書いてあるもの全部）
+      # ③ pip キャッシュを設定する
+      #    requirements.txt が変わったときだけキャッシュを再作成する（hashFiles で検知）
+      #    2回目以降のビルドでは pip のダウンロードをスキップして高速化できる
+      - name: pip キャッシュを設定
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache   # Windows の pip キャッシュフォルダ
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      # ④ アプリの依存ライブラリをインストールする（requirements.txt に書いてあるもの全部）
       - name: 依存ライブラリをインストール
         run: pip install -r requirements.txt
 
-      # ④ PyInstaller をインストールする
+      # ⑤ PyInstaller をインストールする
       #    requirements.txt には入れず、ビルド用途としてここで追加する
       - name: PyInstaller をインストール
         run: pip install pyinstaller
 
-      # ⑤ .exe を生成する
+      # ⑥ .exe を生成する
       #    実行後に dist\ReceiptFlow.exe が作られる
       #    --onefile : 依存ファイルを全部1つの .exe に梱包する
       #    --name    : 出力ファイル名（ReceiptFlow.exe になる）
@@ -46,7 +55,7 @@ jobs:
       - name: .exe をビルド
         run: pyinstaller --onefile --name ReceiptFlow pipeline.py
 
-      # ⑥ GitHub Release を作成して .exe を添付する
+      # ⑦ GitHub Release を作成して .exe を添付する
       #    github.token  : GitHub が自動で発行するトークン。シークレット設定は不要
       #    github.ref_name : push したタグ名（例: v1.0.0）が自動で入る
       #    --generate-notes: コミット履歴を元にリリースノートを自動生成する
