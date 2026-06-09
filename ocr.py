@@ -170,7 +170,16 @@ def init_reader():
         # use_textline_orientation=True：テキスト行の向き（0°/180°）を検出する
         # ※旧パラメータ use_angle_cls は非推奨になったため use_textline_orientation を使う
         # lang='japan'：日本語モデルを使う（初回実行時にモデルをダウンロードする）
-        return PaddleOCR(use_textline_orientation=True, lang='japan')
+        # engine_config で PIR IR（新命令表現）を無効化する。
+        # paddlex の runner.py が config.enable_new_ir(True) を強制呼び出しするため
+        # os.environ のフラグだけでは効かない。ここで直接 False を渡すことで
+        # runner が config.enable_new_ir(False) を呼び、PIR 変換を回避する。
+        # → onednn_instruction.cc の ConvertPirAttribute2RuntimeAttribute バグを回避（Issue #10 参照）
+        return PaddleOCR(
+            use_textline_orientation=True,
+            lang='japan',
+            engine_config={"paddle_static": {"enable_new_ir": False, "run_mode": "paddle"}},
+        )
     elif OCR_ENGINE == "manga-ocr":
         from manga_ocr import MangaOcr
         print("manga-ocrを初期化中...")
