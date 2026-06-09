@@ -54,12 +54,13 @@ jobs:
       #    実行後に dist\ReceiptFlow.exe が作られる
       #    --onefile        : 依存ファイルを全部1つの .exe に梱包する
       #    --name           : 出力ファイル名（ReceiptFlow.exe になる）
-      #    --collect-data   : 指定パッケージのデータファイル（YAML等）も梱包する
-      #                       paddleocr・paddlex はパイプライン設定ファイルを実行時に参照するため必須
+      #    --collect-all    : 指定パッケージの Python ファイル・バイナリ・データファイルをすべて梱包する
+      #                       paddleocr・paddlex は OCR モジュールを動的に読み込むため静的解析で検出できない
+      #                       --collect-data（データのみ）では不足するため --collect-all が必要
       #    pipeline.py      : エントリーポイント（最初に実行されるファイル）
       - name: .exe をビルド
         if: startsWith(github.ref, 'refs/tags/')
-        run: pyinstaller --onefile --name ReceiptFlow --collect-data paddleocr --collect-data paddlex pipeline.py
+        run: pyinstaller --onefile --name ReceiptFlow --collect-all paddleocr --collect-all paddlex pipeline.py
 
       # ⑦ GitHub Release を作成して .exe と使い方ガイドを添付する
       #    タグ push のときだけ実行（main push はキャッシュ作成目的のため Release は不要）
