@@ -8,9 +8,9 @@ import os
 import sys
 import datetime
 
-# PaddlePaddle が Windows で OneDNN（Intel MKL-DNN）をデフォルト有効にするため
-# ConvertPirAttribute2RuntimeAttribute の未実装バグに当たる（Issue #8）。
-# paddle が import される前にこの環境変数をセットして OneDNN を無効化する
+# pipeline.py 側でも同じフラグを設定している。
+# ocr.py 単体で実行するケースのためにここでも設定する（二重設定は無害）。
+os.environ['FLAGS_enable_pir_api'] = '0'
 os.environ['FLAGS_use_mkldnn'] = '0'
 
 # スクリプト・exe どちらの実行方法でも正しいプロジェクトルートを取得する

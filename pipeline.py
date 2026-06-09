@@ -1,5 +1,17 @@
 import os
 import sys
+
+# PaddlePaddle 3.x の新 PIR Executor には OneDNN 命令ハンドラーにバグがある（Issue #8）。
+# pipeline.py の最上部（他の import より前）で設定することで、
+# PyInstaller のランタイムフックが早期に paddle を初期化しても確実に反映される。
+#
+# FLAGS_enable_pir_api=0 : 新 PIR Executor を無効化して旧 fluid Executor にフォールバックする
+#                          → バグのない OneDNN 経路を通る
+# FLAGS_use_mkldnn=0     : 旧 fluid Executor 上で OneDNN を無効化する
+#                          ※ PIR Executor はこのフラグを無視するため、先に PIR を無効化してから設定する
+os.environ['FLAGS_enable_pir_api'] = '0'
+os.environ['FLAGS_use_mkldnn'] = '0'
+
 import datetime
 import shutil
 import traceback
