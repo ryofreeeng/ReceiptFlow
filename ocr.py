@@ -8,6 +8,11 @@ import os
 import sys
 import datetime
 
+# PaddlePaddle が Windows で OneDNN（Intel MKL-DNN）をデフォルト有効にするため
+# ConvertPirAttribute2RuntimeAttribute の未実装バグに当たる（Issue #8）。
+# paddle が import される前にこの環境変数をセットして OneDNN を無効化する
+os.environ['FLAGS_use_mkldnn'] = '0'
+
 # スクリプト・exe どちらの実行方法でも正しいプロジェクトルートを取得する
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -257,6 +262,7 @@ def pdf_to_images(pdf_path, session_dir):
         # _bin{値}   ：binarization（2値化）の略。しきい値を末尾に付ける（例：_bin220）
         # _dn{値}    ：denoise（ノイズ除去）の略。カーネルサイズを末尾に付ける（例：_dn3）
         # _er{値}    ：erode（収縮＝黒領域拡張）の略。カーネルサイズを末尾に付ける（例：_er2）
+        original_stem = stem
         img = preprocess_image(img)
         if PREPROCESS_GRAYSCALE:
             stem += "_gray"
@@ -267,10 +273,13 @@ def pdf_to_images(pdf_path, session_dir):
         if PREPROCESS_ERODE:
             stem += f"_er{ERODE_KERNEL}"
 
-        if SAVE_DEBUG:
-            # 前処理後の画像を保存する。元画像（pix.save）とは別ファイルになる
-            # cv2.imwrite()はグレースケール（2次元配列）もRGB（3次元配列）も保存できる
-            cv2.imwrite(os.path.join(session_dir, f"{stem}.png"), img)
+        if SAVE_DEBUG and stem != original_stem:
+            # 前処理が適用された（stemが変化した）場合のみ保存する。
+            # 前処理なし（stem変化なし）の場合は pix.save() と重複するためスキップする（Issue #9）。
+            # cv2.imwrite は Windows で非ASCII パスを CP932 として解釈して文字化けするため、
+            # cv2.imencode + numpy.tofile の組み合わせで保存する（Issue #9）
+            _, enc = cv2.imencode('.png', img)
+            enc.tofile(os.path.join(session_dir, f"{stem}.png"))
             print(f"  前処理後画像を保存: {stem}.png")
 
         results.append((img, stem))
