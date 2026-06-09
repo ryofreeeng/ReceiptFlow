@@ -52,12 +52,14 @@ jobs:
       # ⑥ .exe を生成する（タグ push のときだけ実行）
       #    main push 時はキャッシュ作成のみが目的のためスキップする
       #    実行後に dist\ReceiptFlow.exe が作られる
-      #    --onefile : 依存ファイルを全部1つの .exe に梱包する
-      #    --name    : 出力ファイル名（ReceiptFlow.exe になる）
-      #    pipeline.py: エントリーポイント（最初に実行されるファイル）
+      #    --onefile        : 依存ファイルを全部1つの .exe に梱包する
+      #    --name           : 出力ファイル名（ReceiptFlow.exe になる）
+      #    --collect-data   : 指定パッケージのデータファイル（YAML等）も梱包する
+      #                       paddleocr・paddlex はパイプライン設定ファイルを実行時に参照するため必須
+      #    pipeline.py      : エントリーポイント（最初に実行されるファイル）
       - name: .exe をビルド
         if: startsWith(github.ref, 'refs/tags/')
-        run: pyinstaller --onefile --name ReceiptFlow pipeline.py
+        run: pyinstaller --onefile --name ReceiptFlow --collect-data paddleocr --collect-data paddlex pipeline.py
 
       # ⑦ GitHub Release を作成して .exe と使い方ガイドを添付する
       #    タグ push のときだけ実行（main push はキャッシュ作成目的のため Release は不要）
