@@ -115,7 +115,7 @@ cmd = [
 
 # 実行するコマンドをログとして出力しておく（デバッグ・確認用）
 # " ".join(cmd): リストの要素をスペースで結合して1つの文字列にする
-print("実行コマンド:", " ".join(cmd))
+print("Running command:", " ".join(cmd))
 
 # subprocess.run: cmd に指定したコマンドを子プロセスとして実行する
 # check=True: コマンドが失敗（終了コード != 0）したときに例外を発生させる
