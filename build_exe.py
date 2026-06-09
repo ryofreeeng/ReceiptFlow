@@ -9,8 +9,14 @@ PyInstaller はデフォルトでコードファイル（.py）しか梱包し�
 
 このスクリプトは：
   1. インストール済みパッケージを確認して --copy-metadata フラグを自動生成する
-  2. pyinstaller を実行して .exe を作成する
+  2. paddle/libs の DLL フォルダを自動検出して --add-binary フラグを生成する
+  3. pyinstaller を実行して .exe を作成する
 """
+
+# os: ファイルパスの操作・存在確認などに使う標準ライブラリ
+#     os.path.join("a", "b") → "a/b"（OS に合わせたパス区切りで結合）
+#     os.path.exists(path) → パスが存在するか True/False で返す
+import os
 
 # subprocess: Python スクリプトの中から別のコマンド（pyinstaller 等）を実行するための標準ライブラリ
 #             Pythonでいう「シェルコマンドを呼び出す窓口」
@@ -81,6 +87,36 @@ for pkg in TARGET_PACKAGES:
         pass
 
 
+# ─── --add-binary フラグの生成（paddle/libs の DLL）────────────────────────
+
+# PaddlePaddle は実行時に paddle/libs/ 内の DLL（mklml.dll 等）を
+# C言語レベルで動的にロードする。Python の import 文を使わないため
+# PyInstaller の静的スキャンでは絶対に検出できない。
+# --add-binary でこのフォルダごと明示的に梱包する必要がある。
+
+import paddle  # paddle パッケージのインストール場所を特定するために import する
+
+# os.path.dirname(paddle.__file__):
+#   paddle.__file__ → paddle パッケージの __init__.py のフルパス
+#                     例: C:/venv/Lib/site-packages/paddle/__init__.py
+#   os.path.dirname(...) → そのファイルが入っているフォルダのパス
+#                     例: C:/venv/Lib/site-packages/paddle/
+# os.path.join(..., "libs") → paddle/libs フォルダのパスを作る
+paddle_libs_dir = os.path.join(os.path.dirname(paddle.__file__), "libs")
+
+binary_flags = []
+if os.path.exists(paddle_libs_dir):
+    # --add-binary の書式: "元のパス{区切り}配置先"
+    # os.pathsep: OS に合わせた区切り文字（Windows では ";" / Mac・Linux では ":"）
+    #             PyInstaller は「元のパス;配置先」の形式でバイナリの梱包先を指定する
+    # "." は .exe 展開時のルートディレクトリに配置することを意味する
+    #   → DLL がルートに置かれるため OS から参照できるようになる
+    binary_flags.extend(["--add-binary", f"{paddle_libs_dir}{os.pathsep}."])
+    print(f"Found paddle/libs: {paddle_libs_dir}")
+else:
+    print("paddle/libs not found, skipping --add-binary")
+
+
 # ─── pyinstaller コマンドの組み立て ─────────────────────────────────────────
 
 # cmd: subprocess.run に渡すコマンドのリスト。スペース区切りの文字列を1要素ずつ分割したもの
@@ -103,9 +139,15 @@ cmd = [
     "--collect-all", "paddlex",
     # paddleocr 同様、OCR 用モジュールを動的にロードするため --collect-all が必要
 
-] + copy_flags + [
-    # + copy_flags: 上で自動生成した --copy-metadata フラグ群をここに展開する
-    # + []: リスト同士の結合（Python では + でリストをつなげられる）
+    "--hidden-import", "scipy._cyutility",
+    # --hidden-import: import 文が文字列・変数で書かれているため静的スキャンで検出できない
+    #                  モジュールを明示的に梱包する指定
+    # scipy._cyutility は paddlex が実行時に動的にロードする内部モジュール
+
+] + copy_flags + binary_flags + [
+    # + copy_flags:   上で自動生成した --copy-metadata フラグ群（登録証フォルダの梱包）
+    # + binary_flags: 上で生成した --add-binary フラグ（paddle/libs DLL の梱包）
+    # + []:           リスト同士の結合（Python では + でリストをつなげられる）
 
     "pipeline.py",      # エントリーポイント: .exe 起動時に最初に実行されるファイル
 ]
@@ -113,7 +155,7 @@ cmd = [
 
 # ─── 実行 ────────────────────────────────────────────────────────────────────
 
-# 実行するコマンドをログとして出力しておく（デバッグ・確認用）
+# 実行するコマンドをログとして出力しておく（GitHub Actions のログで確認できる）
 # " ".join(cmd): リストの要素をスペースで結合して1つの文字列にする
 print("Running command:", " ".join(cmd))
 
