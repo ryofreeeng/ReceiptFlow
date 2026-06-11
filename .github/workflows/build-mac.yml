@@ -48,10 +48,12 @@ jobs:
         run: pip install pyinstaller
 
       # ⑤ Mac バイナリを生成する
+      #    build_exe.py が --collect-all / --copy-metadata / --add-binary フラグを自動生成して
+      #    pyinstaller を実行する（Windows .exe ビルドと同じスクリプトを使用）
       #    Mac では .exe ではなく拡張子なしの Unix 実行ファイルが生成される
       #    出力先は dist/ReceiptFlow（拡張子なし）
       - name: バイナリをビルド
-        run: pyinstaller --onefile --name ReceiptFlow pipeline.py
+        run: python build_exe.py
 
       # ⑥ 既存の Release にバイナリを追加する
       #    gh release upload = 既存Release への追加（create ではなく upload）

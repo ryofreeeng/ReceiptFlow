@@ -1,16 +1,20 @@
-"""Windows .exe ビルドスクリプト
+"""バイナリビルドスクリプト（Windows .exe / Mac Unix バイナリ 共通）
 
 【なぜこのスクリプトが必要か】
 paddlex は起動時に importlib.metadata を使って依存パッケージの「登録証（.dist-info）」を確認する。
   例: importlib.metadata.version("opencv-contrib-python") → インストール済みかどうか調べる
 
 PyInstaller はデフォルトでコードファイル（.py）しか梱包しない。
-.dist-info（登録証フォルダ）は梱包されないため、.exe 内で上記の確認が失敗する → DependencyError
+.dist-info（登録証フォルダ）は梱包されないため、バイナリ内で上記の確認が失敗する → DependencyError
 
 このスクリプトは：
   1. インストール済みパッケージを確認して --copy-metadata フラグを自動生成する
-  2. paddle/libs の DLL フォルダを自動検出して --add-binary フラグを生成する
-  3. pyinstaller を実行して .exe を作成する
+  2. paddle/libs のライブラリフォルダを自動検出して --add-binary フラグを生成する
+     （Windows: mklml.dll 等の DLL / Mac: liblapack.dylib 等の dylib）
+  3. pyinstaller を実行してバイナリを作成する
+     （Windows: dist/ReceiptFlow.exe / Mac: dist/ReceiptFlow）
+
+os.pathsep を使っているため Windows（区切り ";"）・Mac（区切り ":"）どちらでも動く。
 """
 
 # os: ファイルパスの操作・存在確認などに使う標準ライブラリ
@@ -127,8 +131,8 @@ cmd = [
                         # pyinstaller と直接書くと別の環境のものが使われる可能性があるため
     "-m", "PyInstaller", # python -m PyInstaller: Python モジュールとして PyInstaller を実行
 
-    "--onefile",        # すべての依存ファイルを1つの .exe に梱包する（フォルダ方式にしない）
-    "--name", "ReceiptFlow",  # 出力ファイル名（ReceiptFlow.exe になる）
+    "--onefile",        # すべての依存ファイルを1つのバイナリに梱包する（フォルダ方式にしない）
+    "--name", "ReceiptFlow",  # 出力ファイル名（Windows: ReceiptFlow.exe / Mac: ReceiptFlow）
 
     "--collect-all", "paddleocr",
     # --collect-all: 指定パッケージの Python ファイル・バイナリ・データファイルをすべて梱包する
