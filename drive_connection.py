@@ -12,14 +12,16 @@ import os
 import sys
 from dotenv import load_dotenv
 
-# .envファイルを読み込んで環境変数にセットする
-load_dotenv()
-
 # スクリプト・exe どちらの実行方法でも正しいプロジェクトルートを取得する
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# .envファイルを実行ファイルと同じフォルダから明示的に読み込む
+# 引数なしの load_dotenv() はカレントディレクトリを探すため、
+# 別の場所から起動した場合に .env が見つからず KeyError になる
+load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 # アクセス許可の範囲。"drive"はDrive全体の読み書きを意味する
 SCOPES = ["https://www.googleapis.com/auth/drive"]
