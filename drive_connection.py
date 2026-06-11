@@ -26,9 +26,10 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 # アクセス許可の範囲。"drive"はDrive全体の読み書きを意味する
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 # Google Cloud Consoleからダウンロードした認証情報ファイル
-CREDENTIALS_FILE = "credentials.json"
+# BASE_DIR を起点にすることで、どこから起動しても実行ファイルの隣を参照できる
+CREDENTIALS_FILE = os.path.join(BASE_DIR, "credentials.json")
 # 認証後に自動生成されるトークン保存ファイル（次回以降ブラウザ不要になる）
-TOKEN_FILE = "token.json"
+TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
 # 取得対象フォルダのID（.envから読み込む）
 UNPROCESSED_FOLDER_ID = os.environ["UNPROCESSED_FOLDER_ID"]
 # 処理済みファイルの移動先フォルダID（.envから読み込む）
