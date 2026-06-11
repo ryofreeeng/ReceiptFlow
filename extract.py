@@ -61,38 +61,38 @@ _ERA_OFFSETS = {
 
 def _conv_era_kanji(m):
     """和暦漢字（令和7年5月26日）→ datetime.date に変換する"""
-    year = _ERA_OFFSETS[m.group(1)] + int(m.group(2))
-    return datetime.date(year, int(m.group(3)), int(m.group(4)))
+    year = _ERA_OFFSETS[m.group(1)] + int(m.group(2).strip())
+    return datetime.date(year, int(m.group(3).strip()), int(m.group(4).strip()))
 
 def _conv_western_kanji(m):
     """西暦漢字（2025年05月26日）→ datetime.date に変換する。OCR誤読 O→0 を補正する"""
     year = int(m.group(1).replace('O', '0').replace('o', '0'))
-    return datetime.date(year, int(m.group(2)), int(m.group(3)))
+    return datetime.date(year, int(m.group(2).strip()), int(m.group(3).strip()))
 
 def _conv_era_roman(m):
     """英字和暦（R7.5.26）→ datetime.date に変換する。R は令和として処理する"""
-    year = _ERA_OFFSETS['令和'] + int(m.group(1))
-    return datetime.date(year, int(m.group(2)), int(m.group(3)))
+    year = _ERA_OFFSETS['令和'] + int(m.group(1).strip())
+    return datetime.date(year, int(m.group(2).strip()), int(m.group(3).strip()))
 
 def _conv_western_slash(m):
     """西暦スラッシュ（2025/05/26）→ datetime.date に変換する。OCR誤読 O→0 を補正する"""
     year = int(m.group(1).replace('O', '0').replace('o', '0'))
-    return datetime.date(year, int(m.group(2)), int(m.group(3)))
+    return datetime.date(year, int(m.group(2).strip()), int(m.group(3).strip()))
 
 def _conv_western_dot(m):
     """西暦ドット（2025.05.26）→ datetime.date に変換する。OCR誤読 O→0 を補正する"""
     year = int(m.group(1).replace('O', '0').replace('o', '0'))
-    return datetime.date(year, int(m.group(2)), int(m.group(3)))
+    return datetime.date(year, int(m.group(2).strip()), int(m.group(3).strip()))
 
 # パターンと変換関数のペアリスト
 # ルール：「含む文字の種類が多いもの（漢字・英字あり）」を先に置く
 # 理由：数字だけのパターンは漢字・英字を含む行にも部分マッチし得るため
 _DATE_PATTERNS = [
-    (r'(令和|平成|昭和)(\d+)年(\d+)月(\d+)日',       _conv_era_kanji),
-    (r'([12][0O]\d{2})年(\d{1,2})月(\d{1,2})日',     _conv_western_kanji),
-    (r'R(\d{1,2})\.(\d{1,2})\.(\d{1,2})',            _conv_era_roman),
-    (r'([12][0O]\d{2})[/／](\d{1,2})[/／](\d{1,2})', _conv_western_slash),
-    (r'([12][0O]\d{2})\.(\d{1,2})\.(\d{1,2})',       _conv_western_dot),
+    (r'(令和|平成|昭和)\s*(\d+)\s*年\s*(\d+)月\s*(\d+)日',      _conv_era_kanji),
+    (r'([12][0O]\d{2})\s*年\s*(\d{1,2})月\s*(\d{1,2})日',    _conv_western_kanji),
+    (r'R(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{1,2})',              _conv_era_roman),
+    (r'([12][0O]\d{2})[/／]\s*(\d{1,2})[/／]\s*(\d{1,2})',   _conv_western_slash),
+    (r'([12][0O]\d{2})\.\s*(\d{1,2})\.\s*(\d{1,2})',         _conv_western_dot),
 ]
 
 
