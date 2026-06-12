@@ -126,7 +126,7 @@ _EXCLUDE_KEYWORDS = ["小計", "小言十", "税抜", "消費税", "内税", "�
 def _to_int(s):
     """数字文字列（カンマ混じり・OCR誤読 O 含む）を整数に変換する。変換できなければ None。"""
     s = s.replace('O', '0').replace('o', '0')
-    s = re.sub(r'[,，]', '', s)   # 半角・全角カンマを除去
+    s = re.sub(r'[,，.]', '', s)  # 半角・全角カンマと Mac OCR がカンマを誤読したピリオドを除去
     try:
         v = int(s)
         return v if v > 0 else None
@@ -143,13 +143,14 @@ def _parse_amount(line):
          （品目数などの 1〜2 桁を除外するため）
     """
     # ¥ または ￥ または \ の直後の数字を優先
-    m = re.search(r'[¥￥\\]\s*([\dO,，]+)', line)
+    # [\dO,，.]+ : Mac OCR が千の位カンマを . に誤読することがあるため . も許容する
+    m = re.search(r'[¥￥\\]\s*([\dO,，.]+)', line)
     if m:
         val = _to_int(m.group(1))
         if val is not None:
             return val
     # ¥ なし：行内の全数字列を探し、10 以上の最初のものを返す
-    for m in re.finditer(r'[\dO,，]+', line):
+    for m in re.finditer(r'[\dO,，.]+', line):
         val = _to_int(m.group())
         if val is not None and val >= 10:
             return val
@@ -186,7 +187,7 @@ _ITEM_PRICE_RE = re.compile(
     r'^(.+?)'           # グループ1：品目名部分（1文字以上、最短マッチ）
     r'[　 ]+'           # 半角/全角スペース1つ以上（品目名と価格の区切り）
     r'([¥￥]?)'        # グループ2：円マーク（任意）
-    r'([\dO,，]{1,9})'  # グループ3：数字とカンマの並び
+    r'([\dO,，.]{1,9})' # グループ3：数字とカンマの並び（Mac OCR のカンマ→ピリオド誤読も許容）
     r'[　 ]?'           # 数字と外・軽の間のスペース（任意）
     r'([外軽]?)$'       # グループ4：外・軽サフィックス（任意）
 )
@@ -196,7 +197,7 @@ def _is_item_price_valid(item_name, digits_raw):
     """価格パターンにマッチした各部分が品目行として有効かを検証する。
     無効と判断した場合は False を返す。"""
     # 桁数チェック（カンマを除いて5桁以下）
-    digits_only = re.sub(r'[,，]', '', digits_raw).replace('O', '0').replace('o', '0')
+    digits_only = re.sub(r'[,，.]', '', digits_raw).replace('O', '0').replace('o', '0')
     if not digits_only.isdigit() or len(digits_only) > 5:
         return False
 
